@@ -1,26 +1,54 @@
 \chapter{Architettura della libreria}
 \label{sec:architecture}
 
-\section[Stage]{Stage}
+\section{Pipeline}
 
-Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Tristique senectus et netus et malesuada fames ac turpis. Pretium nibh ipsum consequat nisl vel pretium lectus quam. Urna molestie at elementum eu facilisis sed odio morbi quis. Sed egestas egestas fringilla phasellus faucibus scelerisque eleifend. At in tellus integer feugiat. Mauris rhoncus aenean vel elit scelerisque mauris pellentesque pulvinar. Commodo sed egestas egestas fringilla. Nunc lobortis mattis aliquam faucibus purus in massa. Facilisis magna etiam tempor orci eu lobortis elementum nibh. Elementum curabitur vitae nunc sed velit dignissim. Neque volutpat ac tincidunt vitae. Massa id neque aliquam vestibulum morbi blandit cursus risus at. Porta non pulvinar neque laoreet suspendisse interdum consectetur. Turpis in eu mi bibendum. Ut tristique et egestas quis ipsum suspendisse. Integer quis auctor elit sed vulputate mi sit amet. Viverra nam libero justo laoreet sit amet cursus.
+Una \textit{pipeline}, in informatica, è una sequenza di stadi (\textit{stage}) attraverso cui i dati fluiscono in modo ordinato. Ciascuno \textit{stage} riceve un input, lo elabora e produce un output che diventa l’input dello \textit{stage} successivo. Ogni \textit{stage} ha una responsabilità ben delimitata, favorendo così modularità, riuso e facilità di ragionamento sull’intero sistema.
 
-\section[Worker pool]{Worker pool}
+In contesti concorrenti, ogni \textit{stage} può operare in parallelo sugli elementi che riceve. Ciò significa che, mentre lo \textit{stage} 1 elabora un nuovo messaggio, lo \textit{stage} 2 può già processare quello precedente, incrementando così il \textit{throughput} complessivo della pipeline.
 
+All’interno della libreria \textbf{goccia}, il concetto di \textit{pipeline} è incarnato dalla struct \texttt{Pipeline}, che funge da orchestratore degli \textit{stage} e rappresenta il punto di ingresso per l’utilizzo della libreria stessa. Questa struct definisce i tre metodi principali che ogni \textit{stage} deve implementare: \texttt{Init}, \texttt{Run} e \texttt{Close}, corrispondenti alle diverse fasi del ciclo di vita della pipeline (si veda la sezione successiva per ulteriori dettagli). Inoltre, il metodo \texttt{AddStage} consente di aggiungere nuovi \textit{stage} fintanto che la pipeline non è in esecuzione.
+
+<disegno pipeline>
+
+\section{Stage}
+
+Uno \textit{stage} di una pipeline rappresenta un’unità modulare di elaborazione che riceve un input da \textit{stage} precedenti, oppure da una sorgente esterna, lo elabora e produce un output per gli \textit{stage} successivi. In tal modo, gli \textit{stage} formano una catena di trasformazione dei dati scalabile e facilmente componibile. Dal punto di vista concettuale, uno \textit{stage} costituisce un limite logico e sequenziale all’interno della \textit{pipeline}, con un flusso dati che attraversa le fasi di input, elaborazione e output, in maniera simile a quanto avviene nei processi CI/CD (build, test, deploy).
+
+Nella libreria \textbf{goccia}, gli \textit{stage} devono aderire all’interfaccia \texttt{Stage}, la quale definisce i metodi necessari per rendere una struct di Go compatibile con la pipeline principale. Tali metodi coincidono con le tre fasi del ciclo di vita: \texttt{Init}, per l’inizializzazione delle risorse; \texttt{Run}, per l’elaborazione dei dati in input; e \texttt{Close}, per il rilascio delle risorse e la chiusura dello \textit{stage}.
+
+La libreria categorizza gli \textit{stage} in tre gruppi principali — \texttt{Ingress}, \texttt{Processor} ed \texttt{Egress} — tutti aderenti all’interfaccia generica \texttt{Stage}. Un aspetto rilevante riguarda la modalità di esecuzione: il metodo \texttt{Run} viene invocato all’interno di una goroutine dedicata per ciascuno \textit{stage}. Di conseguenza, una pipeline composta da cinque \textit{stage} disporrà di almeno cinque goroutine attive, oltre a quella principale di esecuzione nel main.
+
+<disegno lifecycle>
+
+\section{Connector}
+
+Affinché una \textit{pipeline} possa effettivamente operare, una volta creati gli \textit{stage}, è necessario metterli in comunicazione tramite un componente capace di trasferire i dati da uno \textit{stage} al successivo. Tale componente deve essere \textit{thread safe}, poiché ogni \textit{stage} viene eseguito su una goroutine distinta, e deve disporre di un meccanismo di buffer per mitigare gli effetti della \textit{backpressure}, fenomeno che si manifesta quando uno \textit{stage} a valle elabora i dati più lentamente del precedente, causando un rallentamento a catena.
+
+Il linguaggio Go fornisce, a tal fine, i channel (anche bufferizzati) come tipo primitivo per la comunicazione tra goroutine. Tuttavia, la libreria \textbf{goccia} adotta un approccio differente, basato su un \textit{ring buffer} lock-free, con l’obiettivo di massimizzare il \textit{throughput}. In particolare, si è optato per un’implementazione \textit{Single Producer Single Consumer} (SPSC), poiché la relazione tra gli \textit{stage} della pipeline è di tipo 1:1. La versione \textit{Multiple Producer Multiple Consumer} (MPMC) del \textit{ring buffer} viene invece impiegata nel contesto del \textit{worker pool} (descritto successivamente).
+
+<tabella channel vs ring buffer>
+
+Per mantenere la libreria estensibile a futuri sviluppi, viene definita l’interfaccia \texttt{Connector}, dotata di quattro metodi principali:
 \begin{itemize}
-    \item pattern fan-in fan-out
-    \item Logica dinamica di scaling
-    \item Parametri configurabili e politiche di scala
+    \item \texttt{Write}: per scrivere un dato nel connettore;
+    \item \texttt{Read}: per leggere il dato disponibile;
+    \item \texttt{Close}: per chiudere il connettore e impedire ulteriori scritture;
+    \item \texttt{SetReadTimeout}: per definire un tempo massimo di attesa in caso di assenza di dati in ingresso.
 \end{itemize}
 
-\section[Comunicazione tra stage]{Comunicazione tra stage}
+\section{Worker Pool}
 
-\begin{itemize}
-    \item No channel
-    \item SPSC
-    \item MPMC per fan-in fan-out
-    \item Gestione backpressure e contention
-\end{itemize}
+Un \textit{worker pool} rappresenta una strategia per gestire l’esecuzione concorrente di numerosi compiti (\textit{task}) mediante un numero limitato di lavoratori (\textit{worker}) riutilizzabili nel tempo. Questo approccio consente di evitare la creazione eccessiva di unità di lavoro parallele, situazione che potrebbe portare alla saturazione delle risorse di sistema.
+
+In genere, un \textit{worker pool} è composto da un numero fisso di \textit{worker}, determinato dal programmatore o configurato a \textit{runtime} tramite una variabile d’ambiente. Nel linguaggio Go, la funzione \texttt{runtime.NumCPU()} permette di ottenere il numero di core fisici e virtuali disponibili, favorendo così una gestione ottimizzata delle risorse. Questo rappresenta il punto di partenza per implementare un \textit{worker pool} efficiente, indipendentemente dall’hardware sottostante.
+
+La libreria \textbf{goccia} estende tale concetto introducendo uno \textit{scaler} automatico in grado di aumentare o ridurre dinamicamente il numero di \textit{worker} in base alla quantità di \textit{task} presenti nella coda da cui essi estraggono il lavoro. Tale coda effettua un’operazione di \textit{fan-out}, distribuendo i task in ingresso ai diversi \textit{worker}, e funge anche da buffer intermedio. A valle dei \textit{worker}, un componente analogo svolge la funzione di \textit{fan-in}, ovvero la ricomposizione sequenziale dei risultati derivanti dal processamento dei \textit{task}. Entrambi i componenti sono implementati mediante \textit{ring buffer} MPMC.
+
+Lo \textit{scaler} valuta periodicamente il numero di \textit{worker} attivi, basandosi sulla dimensione della coda di \textit{fan-out}. Se il numero di \textit{task} supera la soglia di riferimento (\texttt{QueueDepthPerWorker}), viene segnalato al \textit{worker pool} di aggiungere un nuovo \textit{worker}; altrimenti, ne viene rimosso uno. Qualora lo \textit{scaler} rilevi ripetutamente la necessità di ridurre i \textit{worker}, viene applicato un tempo di \textit{backoff} esponenziale tra le riduzioni successive. In questo modo, il \textit{worker pool} reagisce rapidamente a un improvviso incremento di carico, riducendo poi progressivamente le risorse una volta gestito il picco.
+
+<disegno worker pool con fan-in/fan-out>
+
 
 \section[Stage di ingress]{Stage di ingress}
 
