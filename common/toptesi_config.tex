@@ -75,3 +75,43 @@
    showtabs=false,
    captionpos=b
 }
+
+\lstdefinelanguage{Go}{
+  morekeywords={
+    break, case, chan, const, continue, default, defer, else, 
+    fallthrough, for, func, go, goto, if, import, interface, 
+    map, package, range, return, select, struct, switch, type, 
+    var, append, bool, byte, cap, close, complex, complex64, 
+    complex128, copy, delete, error, false, float32, float64, 
+    imag, int, int8, int16, int32, int64, iota, len, make, 
+    new, nil, panic, print, println, real, recover, rune, 
+    string, true, uint, uint8, uint16, uint32, uint64, uintptr
+  },
+  sensitive=true,
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]",
+  morestring=[b]',
+  morestring=[b]`
+}
+
+\definecolor{keyword}{RGB}{0, 55, 255}
+
+\lstset{
+  language=Go,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{keyword}\bfseries,
+  commentstyle=\color{gray}\itshape,
+  stringstyle=\color{red},
+  breaklines=true,
+  breakatwhitespace=true,
+  tabsize=2,
+  showstringspaces=false,
+  frame=tb,
+  rulecolor=\color{black},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  numbersep=9pt,
+  captionpos=b,
+  escapeinside={\%*}{*)}
+}
