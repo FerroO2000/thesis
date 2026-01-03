@@ -1,0 +1,91 @@
+\subsection{File}
+
+Lo \textit{File stage} rappresenta un \textit{Ingress stage} progettato per leggere dati da file all'interno di una o più directory monitorate, offrendo un meccanismo flessibile per l'elaborazione di flussi di dati persistenti. A differenza dei precedenti \textit{Ingress stage}, che consumano dati da sorgenti esterne in tempo reale, lo \textit{File stage} consente di leggere sia file statici preesistenti sia file che vengono creati o modificati dinamicamente durante l'esecuzione della \textit{pipeline}. Questo approccio lo rende ideale per scenari quali l'elaborazione offline di log, il monitoraggio di directory in cui sistemi esterni depositano file di dati, o l'implementazione di \textit{pipeline} di elaborazione \textit{batch} altamente reattive. La libreria \textbf{goccia} sfrutta la libreria \textit{open-source} \textit{fsnotify}\cite{fsnotify:github} per il monitoraggio dei cambiamenti nel file system, consentendo di rilevare automaticamente la creazione, modifica o eliminazione di file.
+
+La configurazione dello \textit{File stage} offre un controllo granulare su come i file vengono letti e processati. Il parametro \texttt{WatchedDirs} specifica l'elenco delle directory da monitorare tramite \textit{fsnotify}. Ogni file presente o creato in tali directory sarà automaticamente sottoposto a lettura.
+
+I parametri di lettura controllano aspetti tecnici dell'acquisizione dei dati. Il parametro fondamentale è \texttt{ChunkSize} (default 4 KB), il quale definisce la dimensione della finestra di lettura dal file tramite il \textit{reader} bufferizzato offerto dalla libreria standard di Go, \texttt{bufio.Reader}\cite{go:bufio:reader}. Tuttavia, lo \textit{File stage} introduce un meccanismo ibrido di delimitazione dei chunk tramite i parametri \texttt{ChunkDelim} (default \texttt{'\textbackslash n'}) e \texttt{MaxChunkSize} (default 32 KB). Per impostazione predefinita, il lettore non si limita a restituire semplici chunk di dimensione fissa, ma continua a leggere oltre il \texttt{ChunkSize} finché non incontra il delimitatore (tipicamente newline), oppure raggiunge la dimensione massima. Questo consente di gestire automaticamente linee di lunghezza variabile senza frammentarle, comportamento particolarmente utile per file di log dove ogni riga rappresenta un record logico indivisibile. Tale comportamento può essere disabilitato, tornando a una lettura sempre di dimensione fissa.
+
+Il parametro \texttt{ForceReRead} (default \texttt{false}) controlla il comportamento in caso di riapertura di un file. Se \texttt{false}, il lettore memorizza l'\textit{offset} dell'ultima lettura e riprende da lì; se \texttt{true}, la lettura riinizia dall'inizio del file, opzione utile per scenari di \textit{replay} o elaborazione idempotente. Il parametro \texttt{CloseDebounce} (default 1 secondo) specifica il tempo di attesa dopo il raggiungimento di EOF prima di chiudere effettivamente il file. Questo meccanismo è fondamentale in scenari in cui il file viene modificato frequentemente: invece di chiudere e riaprire il file ripetutamente, il lettore attende che siano trascorsi $T$ secondi di inattività, riducendo così l'\textit{overhead} di aperture e chiusure successive.
+
+Lo \textit{File stage} implementa un'architettura distribuita basata su molteplici \textit{reader}, uno per ogni file in lettura. Ogni \textit{reader} è eseguito su una goroutine dedicata e comunica tramite una coda condivisa (\textit{fan-in}) con il \textit{bridge}, una goroutine ausiliaria responsabile di inoltrare i messaggi al \textit{connector} di uscita. Questo design consente di leggere parallelamente da molteplici file, mentre la sincronizzazione tramite \textit{fan-in} garantisce un ordinamento coerente dei messaggi verso il resto della \textit{pipeline}.
+
+<disegno stage, reader, fan-in>
+
+Lo \textit{stage} mantiene una mappa di \textit{reader} attivi (\texttt{readers}) e monitora continuamente la directory tramite \texttt{fsnotify.Watcher}\cite{fsnotify:watcher}. Quando \textit{fsnotify} segnala un evento (creazione, modifica, rimozione di file), viene determinata l'azione appropriata: se il file è stato creato o modificato, il lettore è avviato (oppure creato e avviato se non esiste già); se il file è stato eliminato o rinominato, il lettore è chiuso e rimosso dalla mappa. La lettura iniziale dei file preesistenti avviene in \texttt{readExistingFiles}, una routine che scansiona le directory configurate e avvia i \textit{reader} per tutti i file già presenti, poiché \textit{fsnotify} non genera eventi per file che esistevano prima dell'inizio del monitoraggio.
+
+\begin{lstlisting}[language=Go, caption={Ciclo principale del File stage (ingress/file.go, metodo run)}]
+// ...
+
+// Before starting the watcher, read all the existing files
+fs.readExistingFiles(ctx)
+
+for {
+	select {
+	case <-ctx.Done():
+		return
+
+	case event, ok := <-fs.watcher.Events:
+		if !ok {
+			return
+		}
+
+		// Handle the fsnotify event
+		fs.handleEvent(ctx, event)
+
+	case err, ok := <-fs.watcher.Errors:
+		if !ok {
+			return
+		}
+
+		fs.tel.LogError("watcher error", err)
+	}
+}
+\end{lstlisting}
+
+\begin{lstlisting}[language=Go, caption={Gestione eventi fsnotify del File stage (ingress/file.go, metodo handleEvent)}]
+func (fs *fileSource) handleEvent(ctx context.Context, event fsnotify.Event) {
+	path := event.Name
+
+	// Handle file deletion/renaming
+	if event.Op&fsnotify.Remove == fsnotify.Remove ||
+		event.Op&fsnotify.Rename == fsnotify.Rename {
+
+		if fs.hasReader(path) {
+			fs.removeReader(path)
+		}
+
+		return
+	}
+
+	// Handle file creation
+	if event.Op&fsnotify.Create == fsnotify.Create {
+		if fs.hasReader(path) {
+			fs.startReader(ctx, path)
+		} else {
+			fs.addAndStartReader(ctx, path)
+		}
+
+		return
+	}
+
+	// Handle file modification
+	if event.Op&fsnotify.Write == fsnotify.Write {
+		if fs.hasReader(path) {
+			fs.startReader(ctx, path)
+		} else {
+			fs.addAndStartReader(ctx, path)
+		}
+
+		return
+	}
+}
+\end{lstlisting}
+
+Ogni \textit{reader} mantiene una macchina a stati con quattro stati principali: \texttt{Idle} (non ancora avviato), \texttt{Started} (in lettura attiva), \texttt{Paused} (in attesa dopo EOF), e \texttt{Closed} (chiuso e liberato). Il ciclo di lettura del \textit{reader} legge chunk sequenziali dal file. Quando la ricerca del delimitatore è abilitata, il lettore applica la seguente logica: dopo ogni lettura, verifica se l'ultimo byte del chunk è il delimitatore; se non lo è, continua a leggere byte aggiuntivi finché non trova il delimitatore o raggiunge \texttt{MaxChunkSize}. Questo approccio ibrido combina l'efficienza della lettura bufferizzata con la correttezza logica delle linee complete.
+
+Quando EOF è raggiunto, il lettore entra nello stato \texttt{Paused} e attende per \texttt{CloseDebounce}. Se durante questo periodo il file viene modificato e \textit{fsnotify} invia un evento di scrittura, il lettore è riavviato; altrimenti, dopo il \textit{timeout}, il file è chiuso e il \textit{reader} terminato. Questo meccanismo di \textit{debounce} riduce drasticamente la frequenza di aperture e chiusure, specialmente in scenari in cui file di log vengono scritti incrementalmente.
+
+Anche il messaggio dello \textit{File stage} implementa l'interfaccia di serializzazione. La struct \texttt{FileMessage} contiene metadati specifici per i file: \texttt{Path} (il percorso del file), \texttt{Chunk} (il buffer contenente i dati letti), \texttt{ChunkSize} (la dimensione effettiva del chunk), \texttt{Offset} (l'\textit{offset} nel file prima che il chunk fosse letto), e \texttt{DelimiterFound} (un booleano che indica se il chunk termina con il delimitatore configurato). Tali metadati consentono ai \textit{Processor stage} a valle di accedere sia ai dati sia alle informazioni di contesto, abilitando scenari sofisticati quali la rielaborazione selettiva di range di file o il debug basato sulla posizione.
+
+Lo \textit{File stage} espone tre metriche: \texttt{readers} (numero totale di \textit{reader} gestiti), \texttt{active\_readers} (numero di \textit{reader} in lettura attiva), e \texttt{read\_bytes} (numero totale di byte letti). Inoltre, ogni chunk è accompagnato da uno span OpenTelemetry che registra la dimensione del chunk, la presenza di dati letti oltre il \texttt{ChunkSize}, e il percorso del file, fornendo visibilità completa sulla performance di lettura.

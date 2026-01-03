@@ -1,0 +1,11 @@
+\section{Worker Pool}
+
+Un \textit{worker pool} rappresenta una strategia per gestire l’esecuzione concorrente di numerosi compiti (\textit{task}) mediante un numero limitato di lavoratori (\textit{worker}) riutilizzabili nel tempo. Questo approccio consente di evitare la creazione eccessiva di unità di lavoro parallele, situazione che potrebbe portare alla saturazione delle risorse di sistema.
+
+In genere, un \textit{worker pool} è composto da un numero fisso di \textit{worker}, determinato dal programmatore o configurato a \textit{runtime} tramite una variabile d’ambiente. Nel linguaggio Go, la funzione \texttt{runtime.NumCPU()} permette di ottenere il numero di core fisici e virtuali disponibili, favorendo così una gestione ottimizzata delle risorse. Questo rappresenta il punto di partenza per implementare un \textit{worker pool} efficiente, indipendentemente dall’hardware sottostante.
+
+La libreria \textbf{goccia} estende tale concetto introducendo uno \textit{scaler} automatico in grado di aumentare o ridurre dinamicamente il numero di \textit{worker} in base alla quantità di \textit{task} presenti nella coda da cui essi estraggono il lavoro. Tale coda effettua un’operazione di \textit{fan-out}, distribuendo i task in ingresso ai diversi \textit{worker}, e funge anche da buffer intermedio. A valle dei \textit{worker}, un componente analogo svolge la funzione di \textit{fan-in}, ovvero la ricomposizione sequenziale dei risultati derivanti dal processamento dei \textit{task}. Entrambi i componenti sono implementati mediante \textit{ring buffer} MPMC.
+
+Lo \textit{scaler} valuta periodicamente il numero di \textit{worker} attivi, basandosi sulla dimensione della coda di \textit{fan-out}. Se il numero di \textit{task} supera la soglia di riferimento (\texttt{QueueDepthPerWorker}), viene segnalato al \textit{worker pool} di aggiungere un nuovo \textit{worker}; altrimenti, ne viene rimosso uno. Qualora lo \textit{scaler} rilevi ripetutamente la necessità di ridurre i \textit{worker}, viene applicato un tempo di \textit{backoff} esponenziale tra le riduzioni successive. In questo modo, il \textit{worker pool} reagisce rapidamente a un improvviso incremento di carico, riducendo poi progressivamente le risorse una volta gestito il picco.
+
+<disegno worker pool con fan-in/fan-out>

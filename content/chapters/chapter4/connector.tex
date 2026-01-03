@@ -1,0 +1,15 @@
+\section{Connector}
+
+Affinché una \textit{pipeline} possa effettivamente operare, una volta creati gli \textit{stage}, è necessario metterli in comunicazione tramite un componente capace di trasferire i dati da uno \textit{stage} al successivo. Tale componente deve essere \textit{thread safe}, poiché ogni \textit{stage} viene eseguito su una goroutine distinta, e deve disporre di un meccanismo di buffer per mitigare gli effetti della \textit{backpressure}, fenomeno che si manifesta quando uno \textit{stage} a valle elabora i dati più lentamente del precedente, causando un rallentamento a catena.
+
+Il linguaggio Go fornisce, a tal fine, i channel (anche bufferizzati) come tipo primitivo per la comunicazione tra goroutine. Tuttavia, la libreria \textbf{goccia} adotta un approccio differente, basato su un \textit{ring buffer} lock-free, con l’obiettivo di massimizzare il \textit{throughput}. In particolare, si è optato per un’implementazione \textit{Single Producer Single Consumer} (SPSC), poiché la relazione tra gli \textit{stage} della pipeline è di tipo 1:1. La versione \textit{Multiple Producer Multiple Consumer} (MPMC) del \textit{ring buffer} viene invece impiegata nel contesto del \textit{worker pool} (descritto successivamente).
+
+<tabella channel vs ring buffer>
+
+Per mantenere la libreria estensibile a futuri sviluppi, viene definita l’interfaccia \texttt{Connector}, dotata di quattro metodi principali:
+\begin{itemize}
+    \item \texttt{Write}: per scrivere un dato nel connettore;
+    \item \texttt{Read}: per leggere il dato disponibile;
+    \item \texttt{Close}: per chiudere il connettore e impedire ulteriori scritture;
+    \item \texttt{SetReadTimeout}: per definire un tempo massimo di attesa in caso di assenza di dati in ingresso.
+\end{itemize}

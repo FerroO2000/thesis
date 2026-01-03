@@ -1,0 +1,9 @@
+\section{Stage}
+
+Uno \textit{stage} di una pipeline rappresenta un’unità modulare di elaborazione che riceve un input da \textit{stage} precedenti, oppure da una sorgente esterna, lo elabora e produce un output per gli \textit{stage} successivi. In tal modo, gli \textit{stage} formano una catena di trasformazione dei dati scalabile e facilmente componibile. Dal punto di vista concettuale, uno \textit{stage} costituisce un limite logico e sequenziale all’interno della \textit{pipeline}, con un flusso dati che attraversa le fasi di input, elaborazione e output, in maniera simile a quanto avviene nei processi CI/CD (build, test, deploy).
+
+Nella libreria \textbf{goccia}, gli \textit{stage} devono aderire all’interfaccia \texttt{Stage}, la quale definisce i metodi necessari per rendere una struct di Go compatibile con la pipeline principale. Tali metodi coincidono con le tre fasi del ciclo di vita: \texttt{Init}, per l’inizializzazione delle risorse; \texttt{Run}, per l’elaborazione dei dati in input; e \texttt{Close}, per il rilascio delle risorse e la chiusura dello \textit{stage}.
+
+La libreria categorizza gli \textit{stage} in tre gruppi principali — \texttt{Ingress}, \texttt{Processor} ed \texttt{Egress} — tutti aderenti all’interfaccia generica \texttt{Stage}. Un aspetto rilevante riguarda la modalità di esecuzione: il metodo \texttt{Run} viene invocato all’interno di una goroutine dedicata per ciascuno \textit{stage}. Di conseguenza, una pipeline composta da cinque \textit{stage} disporrà di almeno cinque goroutine attive, oltre a quella principale di esecuzione nel main.
+
+<disegno lifecycle>

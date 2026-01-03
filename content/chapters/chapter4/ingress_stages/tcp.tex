@@ -1,0 +1,127 @@
+\subsection{TCP}
+
+Lo \textit{TCP stage} rappresenta un \textit{Ingress stage} progettato per ricevere flussi dati da connessioni \textit{TCP}. A differenza dello \textit{UDP stage}, che gestisce singoli datagrammi provenienti da molteplici mittenti senza stato, il \textit{TCP stage} stabilisce connessioni persistenti con i client e mantiene lo stato della comunicazione per ciascuna connessione. Questa caratteristica lo rende particolarmente adatto per scenari in cui l'affidabilità del trasporto è critica, quali l'acquisizione di log da sistemi remoti, la ricezione di comandi da applicazioni client o l'integrazione con protocolli applicativi che richiedono una comunicazione orientata allo \textit{stream}. Diversamente dallo \textit{Ticker stage} e dallo \textit{UDP stage}, il \textit{TCP stage} introduce una complessità significativamente maggiore, poiché deve gestire molteplici connessioni concorrenti, ciascuna potenzialmente caratterizzata da uno stato diverso, e deve risolvere il problema fondamentale di come delimitare i messaggi all'interno di un flusso di byte continuo.
+
+La libreria \textbf{goccia} mette a disposizione una configurazione flessibile per il \textit{TCP stage}, incapsulata nella struct \texttt{TCPConfig}. I parametri fondamentali sono analoghi a quelli dello \textit{UDP stage}: un indirizzo IP e una porta definiscono il punto di ascolto su cui il server \textit{TCP} rimane in attesa di connessioni in ingresso, mentre un buffer di lettura viene utilizzato per acquisire i dati dalla connessione. Tuttavia, il \textit{TCP stage} introduce ulteriori parametri specifici per la gestione avanzata del flusso.
+
+Il parametro \texttt{ReadTimeout} specifica il tempo massimo di inattività consentito su una connessione prima che essa venga forzatamente chiusa. Questo meccanismo protegge il server da client che si collegano e rimangono silenti indefinitamente, occupando risorse preziose del sistema. Il parametro \texttt{MaxMessageSize} (default 4 MB) definisce la dimensione massima consentita per un messaggio; qualora il buffer accumulato superi questo valore, la connessione viene chiusa al fine di prevenire attacchi di \textit{denial of service} basati su messaggi abnormemente grandi.
+
+Un aspetto cruciale della configurazione è il \textit{framing mode}, definito dal campo \texttt{FramingMode}, il quale specifica come i messaggi vengono delimitati all'interno del flusso \textit{TCP}. Sono supportate due modalità distinte:
+\begin{itemize}
+    \item \textbf{\textit{Delimited}} (default): I messaggi sono separati da un delimitatore, tipicamente una sequenza di byte come \texttt{"\textbackslash r\textbackslash n"}, impostabile dall'utente nel campo \texttt{Delimiter}. In questa modalità, il \textit{parser} ricerca la sequenza delimitatrice all'interno del buffer accumulato e la utilizza come marcatore di fine messaggio. Esempi di protocolli di livello superiore che impiegano questa strategia sono HTTP/1.x, SMTP e FTP.
+    \item \textbf{\textit{Length-Prefixed}}: I messaggi sono preceduti da un header contenente la lunghezza del messaggio. Questa modalità introduce parametri aggiuntivi per estrarre la lunghezza del payload a partire da un header:
+    \begin{itemize}
+        \item \texttt{HeaderLen} (default 16 byte): la dimensione totale dell'header.
+        \item \texttt{MessageLengthFieldOffset} (default 0): l'offset all'interno dell'header dove inizia il campo di lunghezza.
+        \item \texttt{MessageLengthFieldLen}: la dimensione del campo di lunghezza (1, 2, 4 o 8 byte).
+        \item \texttt{MessageLengthFieldEndianess}: l'ordine dei byte (\textit{little-endian} o \textit{big-endian}) del campo di lunghezza.
+    \end{itemize}
+\end{itemize}
+
+Infine, il parametro \texttt{OutputQueueSize} specifica la dimensione della coda interna (\textit{fan-in}) che media tra le goroutine dedicate alle connessioni e il \textit{connector} verso lo \textit{stage} successivo.
+
+Il \textit{TCP stage} implementa un'architettura basata su molteplici goroutine sincronizzate. Il ciclo principale si occupa di accettare nuove connessioni tramite il metodo \texttt{Accept} del \textit{listener} \textit{TCP}\cite{go:net:tcplistener:accept} e, per ciascuna nuova connessione in ingresso, avvia una nuova goroutine dedicata alla gestione della relativa comunicazione. In questo modo, si ottiene un pattern di \textit{fan-out}, in cui una singola goroutine principale genera $N$ goroutine worker, una per ogni connessione cliente.
+
+<disegno singola goroutine che genera N goroutine per N connessioni>
+
+Questa architettura è resa possibile dal \textit{runtime} di Go, il quale è in grado di gestire un numero elevato di goroutine e di schedularle efficientemente su un numero finito di thread del sistema operativo.
+
+\begin{lstlisting}[language=Go, caption={Ciclo principale del TCP stage (ingress/tcp.go, metodo run)}]
+for {
+	// ...
+
+	conn, err := ts.listener.Accept()
+	// Check and handle the error ...
+
+	// Spawn a goroutine to handle the connection
+	go ts.handleConn(ctx, conn)
+}
+\end{lstlisting}
+
+Per quanto riguarda la gestione della singola connessione, il flusso è concettualmente simile a quello dello \textit{UDP stage}, con l'eccezione rilevante della divisione del \textit{stream} in messaggi. Tale divisione richiede l'utilizzo di un buffer ausiliario di accumulazione, oltre al buffer di lettura. Il buffer di accumulazione è fondamentale nei casi in cui un messaggio risulti frammentato su più letture: ad esempio, se il buffer di lettura è di 4~KB e il messaggio trasmesso sulla connessione è di 8~KB, saranno necessarie due letture i cui contenuti dovranno essere accumulati sequenzialmente.
+
+\begin{lstlisting}[language=Go, caption={Buffer per la gestione connessione del TCP stage (ingress/tcp.go, metodo handleConn)}]
+// Preallocate the accumulator
+accBaseCap := min(4*ts.bufferSize, ts.maxMsgSize)
+acc := make([]byte, 0, accBaseCap)
+
+// ...
+
+for {
+	// ...
+
+	// Set the read deadline
+	conn.SetReadDeadline(time.Now().Add(ts.readTimeout))
+
+	// Read the TCP stream
+	n, err := conn.Read(buf)
+	// Check and handle the error ...
+
+	// Append the new bytes to the accumulator
+	acc = append(acc, buf[:n]...)
+
+	// Prevent accumulator from growing too large
+	if len(acc) > ts.maxMsgSize {
+		ts.tel.LogWarn("message too large, closing connection")
+		return
+	}
+
+	for {
+		// Divide the accumulator into messages ...
+	}
+
+	// ...
+}
+\end{lstlisting}
+
+Dopo l'accumulazione dei byte trasmessi, entra in gioco la logica di divisione dei messaggi secondo la modalità configurata nello \textit{stage} (\textit{delimited} oppure \textit{length-prefixed}). In modalità delimitata, la ricerca della sequenza delimitatrice è effettuata tramite \texttt{bytes.Index}; in modalità \textit{length-prefixed}, il \textit{parser} estrae la lunghezza dal campo di header designato, utilizzando funzioni che gestiscono le diverse combinazioni di lunghezza e \textit{endianess} supportate.
+
+\begin{lstlisting}[language=Go, caption={Divisione messaggi del TCP stage (ingress/tcp.go, metodo handleConn)}]
+// ...
+
+for {
+	accLen := len(acc)
+
+	// If the accumulator is smaller than the minimum length,
+	// continue reading the TCP stream
+	if accLen < minAccLen {
+		continue loop
+	}
+
+	// Get the length of the message.
+	msgLen := 0
+	totLen := 0
+	switch ts.framingMode {
+	case TCPFramingModeDelimited:
+		// Search for the delimiter
+		msgLen = bytes.Index(acc, ts.delimiter)
+		totLen = msgLen + ts.delimiterLen
+
+	case TCPFramingModeLengthPrefixed:
+		msgLen = ts.parseHeader(acc[:ts.headerLen])
+		totLen = msgLen + ts.headerLen
+	}
+
+	if msgLen == -1 || accLen < totLen {
+		// If the message length is not found or the accumulator is too small,
+		// break the loop and continue reading the TCP stream
+		break
+	}
+
+	// Extract the message
+	msg := acc[:totLen]
+
+	// Handle the message and send the result to the output connector ...
+
+	// Remove the message from the accumulator
+	acc = acc[totLen:]
+
+	// Check if the accumulator should be reset ...
+}
+
+// ...
+\end{lstlisting}
+
+Il tipo di messaggio prodotto dal \textit{TCP stage} è descritto dalla struct \texttt{TCPMessage}, la quale implementa l'interfaccia di serializzazione, in modo analogo al messaggio dello \textit{UDP stage}. A differenza di \texttt{UDPMessage}, \texttt{TCPMessage} non utilizza un \textit{object pool}, poiché i messaggi \textit{TCP} possono avere dimensioni molto variabili e l'impiego di un pool con buffer pre-allocato potrebbe risultare inefficiente o insufficiente. Il messaggio porta con sé il payload in byte (\texttt{Message}), la dimensione del payload (\texttt{MessageSize}) e l'indirizzo remoto della connessione (\texttt{RemoteAddr}), fornendo così sia il contenuto informativo sia il contesto di provenienza.
+
+Dal punto di vista dell'osservabilità, il \textit{TCP stage} è per molti aspetti simile allo \textit{UDP stage}. Anche in questo caso sono presenti metriche per il numero totale di messaggi e di byte ricevuti, che consentono di monitorare il \textit{throughput} complessivo della \textit{pipeline}. In aggiunta, viene introdotta una metrica specifica, \texttt{open\_connections}, che traccia il numero di connessioni \textit{TCP} attualmente aperte. Tale metrica offre visibilità sul grado di utilizzo delle risorse del server e permette di individuare con facilità situazioni anomale, come un numero insolitamente elevato di connessioni persistenti o client che non rilasciano correttamente le proprie sessioni.

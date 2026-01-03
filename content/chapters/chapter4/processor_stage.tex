@@ -1,0 +1,22 @@
+\section[Processor Stage]{Processor Stage}
+
+Un \textit{Processor stage} rappresenta un'unità di elaborazione intermedia all'interno della \textit{pipeline} di \textbf{goccia}. Diversamente dagli \textit{Ingress stage}, che fungono da punto di ingresso, i \textit{Processor stage} ricevono messaggi da uno \textit{stage} precedente tramite un \textit{connector} di input, li trasformano secondo una logica specifica, e inoltrano il risultato verso lo \textit{stage} successivo tramite un \textit{connector} di output. In altri termini, ogni \textit{Processor stage} implementa una funzione di trasformazione pura: $f(\text{messaggio\_in}) \to \text{messaggio\_out}$, consentendo di costruire \textit{pipeline} complesse attraverso la composizione di trasformazioni modulari. Nel contesto della libreria \textbf{goccia}, i \textit{Processor stage} sono progettati per essere altamente flessibili e riusabili, mantenendo una chiara separazione tra l'infrastruttura di orchestrazione e la logica di elaborazione specifica.
+
+Una caratteristica distintiva dei \textit{Processor stage} è il supporto per due modalità di esecuzione, impostabili in fase di configurazione dello \textit{stage} tramite il parametro \texttt{runningMode}:
+
+\begin{itemize}
+    \item \textbf{\textit{Single Worker Mode}}: Un singolo \textit{worker} elabora sequenzialmente tutti i messaggi in arrivo. Questa modalità è appropriata per operazioni leggere o quando è necessario mantenere l'ordinamento stretto dei messaggi, garantendo che l'ordine di input sia preservato nell'output.
+
+    \item \textbf{\textit{Worker Pool Mode}}: Molteplici \textit{worker} elaborano i messaggi in parallelo. Uno \textit{scaler} automatico aggiusta dinamicamente il numero di \textit{worker} in base al carico della coda di input, massimizzando il \textit{throughput} complessivo. Questa modalità è ideale per operazioni onerose dal punto di vista computazionale o quando l'ordinamento relativo non è critico per la correttezza dell'applicazione.
+\end{itemize}
+
+\input{content/chapters/chapter4/processor_stages/cannelloni.tex}
+\input{content/chapters/chapter4/processor_stages/can.tex}
+
+\begin{itemize}
+    \item CSV encoder/decoder
+    \item Custom
+    \item Filter
+    \item Tee
+    \item ROB
+\end{itemize}

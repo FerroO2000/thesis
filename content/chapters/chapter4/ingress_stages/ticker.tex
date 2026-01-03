@@ -1,0 +1,21 @@
+\subsection{Ticker}
+
+Lo \textit{Ticker stage} rappresenta l'\textit{Ingress stage} più semplice messo a disposizione dalla libreria \textbf{goccia} ed è concepito per generare in modo autonomo un flusso regolare di messaggi, senza dipendere da sorgenti esterne quali socket di rete, file o code di messaggistica. Dal punto di vista concettuale, si tratta di una sorgente periodica di eventi, particolarmente utile per casi d'uso quali il testing della \textit{pipeline}, il benchmarking di prestazioni, l'iniezione di traffico sintetico o la generazione di "heartbeat" applicativi a intervalli costanti. Ogni "tick" corrisponde alla produzione di un messaggio che attraversa l'intera \textit{pipeline}, permettendo di osservare il comportamento dei vari \textit{stage} a valle in presenza di un carico controllato.
+
+La logica di generazione dei messaggi sfrutta il \texttt{time.Ticker} della libreria standard del Go, il quale mette a disposizione un channel notificato ogni volta che l'intervallo $T$ viene raggiunto, dove $T$ è definito dalla configurazione dello \textit{stage}.
+
+\begin{lstlisting}[language=Go, caption={Ciclo principale del Ticker stage (ingress/ticker.go, metodo run)}]
+for {
+	// ...
+	select {
+	case <-ctx.Done():
+		return
+	case <-ts.ticker.C:
+		// generate the ticker message
+	}
+}
+\end{lstlisting}
+
+Nel frammento di codice riportato, è possibile osservare come il costrutto \texttt{select} permetta di ascoltare su molteplici channel in modalità multiplex. In questo caso specifico, il \textit{runtime} rimane in attesa di essere notificato dal ticker oppure della ricezione di un segnale di cancellazione del contesto (\texttt{ctx.Done()}). Quest'ultimo meccanismo è fondamentale per implementare strategie intelligenti di rilascio delle risorse, ad esempio quando il processo riceve un segnale \texttt{SIGINT} o \texttt{SIGTERM}, consentendo così l'implementazione di uno \textit{graceful shutdown} coerente nelle applicazioni. Per questa ragione, nelle librerie Go moderne è prassi richiedere un \texttt{context.Context} come primo argomento di funzioni che impiegano socket o richiedono tempistiche significative per la terminazione.
+
+Il tipo di messaggio prodotto dallo \textit{Ticker stage} è descritto dalla struct \texttt{TickerMessage} e contiene un unico campo specifico, \texttt{TickNumber}, utilizzato per numerare progressivamente i tick. Al momento della generazione del messaggio vengono popolati i campi generici di metadato (tempo di ricezione, timestamp) e viene inizializzata la \textit{root span} per la tracciatura degli attraversamenti degli \textit{stage} successivi, conformemente allo standard OpenTelemetry\cite{otel:trace:api}.

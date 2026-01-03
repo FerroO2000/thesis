@@ -1,0 +1,14 @@
+\section[Ingress Stage]{Ingress Stage}
+
+Uno \textit{Ingress stage} rappresenta il punto di ingresso dei dati all'interno della \textit{pipeline} di elaborazione. Costituisce la prima componente che riceve gli input provenienti dall'esterno del sistema e li introduce nel flusso di elaborazione, alimentando così l'intera catena di \textit{stage} successivi. In sostanza, uno \textit{Ingress stage} agisce come una sorgente di dati, traducendo eventi, messaggi o pacchetti provenienti da differenti protocolli o interfacce in un formato gestibile dalla \textit{pipeline} di \textbf{goccia}.
+
+Nel contesto della libreria, gli \textit{Ingress stage} sono progettati per essere altamente performanti, concorrenti e facilmente integrabili con i meccanismi di comunicazione già definiti dal framework. Ogni \textit{Ingress stage} è quindi responsabile di stabilire una connessione con la sorgente, acquisire i dati in ingresso, trasformarli nel formato previsto e inoltrarli verso lo \textit{stage} successivo.
+
+La libreria \textbf{goccia} fornisce diversi tipi di \textit{Ingress stage}, ciascuno progettato per scenari operativi o fonti di dati differenti.
+
+\input{content/chapters/chapter4/ingress_stages/ticker.tex}
+\input{content/chapters/chapter4/ingress_stages/udp.tex}
+\input{content/chapters/chapter4/ingress_stages/tcp.tex}
+\input{content/chapters/chapter4/ingress_stages/kafka.tex}
+\input{content/chapters/chapter4/ingress_stages/ebpf.tex}
+\input{content/chapters/chapter4/ingress_stages/file.tex}

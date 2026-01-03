@@ -1,0 +1,66 @@
+\subsection{eBPF}
+
+Lo \textit{eBPF stage} rappresenta un \textit{Ingress stage} unico nel panorama della libreria \textbf{goccia}, in quanto non legge dati da una sorgente di rete tradizionale o da un broker esterno, ma comunica direttamente con il kernel Linux tramite programmi \textit{eBPF} (\textit{extended Berkeley Packet Filter}) che sfruttano una map di tipo \textit{ringbuf}. L'\textit{eBPF} consente l'esecuzione sicura di codice \textit{sandbox} direttamente nel kernel, con \textit{overhead} minimo, abilitando scenari di osservabilità, monitoraggio e \textit{security} altamente efficienti. Lo \textit{eBPF stage} è quindi ideale per la raccolta di eventi dal sistema operativo — quali \textit{syscall}, pacchetti di rete, eventi di file system o segnali di performance — senza richiedere una copia dei dati verso lo spazio utente fino al momento dell'effettiva elaborazione. La libreria \textbf{goccia} impiega la libreria \textit{open-source} \textit{cilium/ebpf}\cite{cilium:ebpf}, un \textit{wrapper} Go-nativo che semplifica il caricamento e la gestione di programmi \textit{eBPF} compilati, eliminando la necessità di dipendenze esterne come \textit{libbpf} scritta in C.
+
+L'aspetto più distintivo dello \textit{eBPF stage} è la sua astrazione generica rispetto ai tipi di dati. A differenza degli altri \textit{Ingress stage}, che operano su tipi di messaggio predefiniti, lo \textit{eBPF stage} utilizza i \textit{generics} del Go per permettere agli utenti di definire completamente la struttura dei dati che il programma \textit{eBPF} invia nel \textit{ringbuffer}. Questo approccio consente massima flessibilità: ogni programma \textit{eBPF} produce dati in un formato specifico, e tramite i \textit{generics}, lo \textit{stage} può deserializzare automaticamente i dati grezzi nel tipo Go appropriato.
+
+La configurazione, incapsulata in \texttt{EBPFConfig[O, OPtr]}, si compone di tre componenti funzionali critici:
+
+\begin{itemize}
+    \item \textbf{\texttt{LoadFn}}: Una funzione che carica la specifica \textit{eBPF} compilata (generata da \textit{bpf2go}, uno strumento che converte codice \textit{eBPF} scritto in C nelle \textit{bindings} corrispondenti in Go). Questa funzione ritorna una \texttt{ebpf.CollectionSpec}, ossia la rappresentazione in memoria del programma \textit{eBPF} compilato.
+
+    \item \textbf{\texttt{LinkFn}}: Una funzione che ``attacca'' il programma \textit{eBPF} a un punto di \textit{hook} nel kernel. A seconda del tipo di programma \textit{eBPF}, l'\textit{hook} può essere una \textit{syscall}, un'interfaccia di rete (\textit{XDP}), un punto di traccia kernel (\textit{kprobe/uprobe}), oppure altri. Questa funzione ritorna un \texttt{link.Link}\cite{cilium:ebpf:link}, che rappresenta la connessione attiva tra il programma \textit{eBPF} e il kernel.
+
+    \item \textbf{\texttt{RingBufferGetter}}: Una funzione che estrae la map \textit{eBPF} di tipo \textit{ring buffer} dagli oggetti caricati. Il \textit{ring buffer} rappresenta il meccanismo di comunicazione tra il codice \textit{eBPF} in \textit{kernel space} e l'applicazione in \textit{user space}: il programma \textit{eBPF} scrive dati nel \textit{ring buffer} e lo \textit{stage} legge continuamente da esso.
+\end{itemize}
+
+Un parametro opzionale è \texttt{UseUnsafe}, il quale controlla la strategia di deserializzazione dei dati. Se impostato a \texttt{true}, i dati grezzi dal \textit{ring buffer} vengono castati direttamente a struct Go tramite \texttt{unsafe.Pointer}, operazione molto veloce ma che richiede una corrispondenza bit-per-bit tra il layout della struct C del programma \textit{eBPF} e la struct Go. Se impostato a \texttt{false} (default), viene utilizzato \texttt{binary.Read} con descodifica \textit{LittleEndian}, approccio più lento ma robusto e portabile. Opzionalmente, \texttt{CollectionOptions} consente di passare opzioni di caricamento avanzate, quali limiti di memoria, selezioni di programmi specifici, o configurazioni di verifica personalizzate.
+
+L'inizializzazione dello \textit{eBPF stage} è complessa e coinvolge molteplici fasi critiche. Nel metodo \texttt{Init}, la prima operazione è rimuovere i limiti di memoria bloccata tramite \texttt{rlimit.RemoveMemlock}\cite{cilium:ebpf:rlimit}: i programmi \textit{eBPF} richiedono che determinati buffer (come il \textit{ring buffer}) siano \textit{pinned} in memoria fisica, e il kernel di default limita quanto spazio un processo utente possa bloccare (tipicamente 64 KB). Questa operazione preliminare è essenziale per consentire l'allocazione della memoria necessaria ai programmi \textit{eBPF} senza violare i vincoli di sistema.
+
+Dopo aver rimosso questo limite, la specifica \textit{eBPF} viene caricata tramite \texttt{LoadFn} e i programmi compilati vengono istanziati nel kernel tramite \texttt{spec.LoadAndAssign}. Successivamente, il programma viene attaccato al punto di \textit{hook} tramite \texttt{LinkFn}, attivando così l'esecuzione del codice \textit{eBPF} nel kernel. Infine, la map \textit{ring buffer} viene estratta tramite \texttt{RingBufferGetter} e passata al metodo \texttt{init} della sorgente.
+
+\begin{lstlisting}[language=Go, caption={Inizializzazione del eBPF stage (ingress/ebpf.go, metodo Init)}]
+func (es *EBPFStage[T, O, OPtr]) Init(ctx context.Context) error {
+	// Remove resource limits for locked memory
+	if err := rlimit.RemoveMemlock(); err != nil {
+		es.tel.LogError("failed to remove memlock limits", err)
+		return err
+	}
+
+	// Load the compiled eBPF ELF file
+	spec, err := es.cfg.LoadFn()
+	if err != nil {
+		es.tel.LogError("failed to load eBPF spec", err)
+		return err
+	}
+
+	// Load the eBPF objects
+	var dummyObjs O
+	objs := OPtr(&dummyObjs)
+	if err := spec.LoadAndAssign(objs, es.cfg.CollectionOptions); err != nil {
+		es.tel.LogError("failed to load eBPF objects", err)
+		return err
+	}
+	es.objs = objs
+
+	// Get the link
+	link, err := es.cfg.LinkFn(objs)
+	if err != nil {
+		es.tel.LogError("failed to attach eBPF program", err)
+		return err
+	}
+	es.link = link
+
+	// Get the ring buffer map
+	ringBufferMap := es.cfg.RingBufferGetter(objs)
+
+	// ...
+}
+\end{lstlisting}
+
+Durante la fase di \texttt{Run}, il ciclo principale esegue la lettura dal \textit{ring buffer} tramite il suo metodo \texttt{Read}, che rimane bloccante in attesa di nuovi record. Per ogni record disponibile, viene effettuata la deserializzazione del contenuto nel tipo Go appropriato e il messaggio risultante è inoltrato al \textit{connector} di uscita.
+
+Il tipo di messaggio \texttt{EBPFMessage[T]} è completamente generico e contiene un singolo campo \texttt{Data} di tipo \texttt{T} generico. Questo design semplificato riflette il fatto che i dati \textit{eBPF} sono tipicamente \textit{self-contained}: un evento di \textit{syscall} o un pacchetto di rete contiene tutte le informazioni rilevanti all'interno della struct, senza metadati aggiuntivi da preservare come accade negli altri \textit{Ingress stage}.
+
+Il metodo \texttt{Close} dello \textit{stage} è critico, in quanto deve rilasciare le risorse kernel in modo ordinato e sincronizzato. Innanzitutto, il \textit{ring buffer reader} viene chiuso tramite \texttt{es.rb.Close()}. Successivamente, gli oggetti \textit{eBPF} caricati vengono chiusi, scaricando i programmi dal kernel e liberando le mappe associate. Infine, il \textit{link} viene chiuso tramite \texttt{es.link.Close()}, distaccando il programma \textit{eBPF} dal punto di \textit{hook} kernel. Questa sequenza garantisce che, al termine dello \textit{stage}, tutte le risorse kernel siano state rilasciate e lo stato del kernel sia coerente, prevenendo \textit{resource leak} o comportamenti anomali.

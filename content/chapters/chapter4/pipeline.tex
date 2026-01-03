@@ -1,0 +1,9 @@
+\section{Pipeline}
+
+Una \textit{pipeline}, in informatica, è una sequenza di stadi (\textit{stage}) attraverso cui i dati fluiscono in modo ordinato. Ciascuno \textit{stage} riceve un input, lo elabora e produce un output che diventa l’input dello \textit{stage} successivo. Ogni \textit{stage} ha una responsabilità ben delimitata, favorendo così modularità, riuso e facilità di ragionamento sull’intero sistema.
+
+In contesti concorrenti, ogni \textit{stage} può operare in parallelo sugli elementi che riceve. Ciò significa che, mentre lo \textit{stage} 1 elabora un nuovo messaggio, lo \textit{stage} 2 può già processare quello precedente, incrementando così il \textit{throughput} complessivo della pipeline.
+
+All’interno della libreria \textbf{goccia}, il concetto di \textit{pipeline} è incarnato dalla struct \texttt{Pipeline}, che funge da orchestratore degli \textit{stage} e rappresenta il punto di ingresso per l’utilizzo della libreria stessa. Questa struct definisce i tre metodi principali che ogni \textit{stage} deve implementare: \texttt{Init}, \texttt{Run} e \texttt{Close}, corrispondenti alle diverse fasi del ciclo di vita della pipeline (si veda la sezione successiva per ulteriori dettagli). Inoltre, il metodo \texttt{AddStage} consente di aggiungere nuovi \textit{stage} fintanto che la pipeline non è in esecuzione.
+
+<disegno pipeline>

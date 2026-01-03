@@ -1,0 +1,48 @@
+\subsection{UDP}
+
+Lo \textit{UDP stage} rappresenta un \textit{Ingress stage} progettato per ricevere datagrammi \textit{UDP} provenienti dalla rete. A differenza dello \textit{Ticker stage}, che genera autonomamente messaggi a intervalli regolari, lo \textit{UDP stage} rimane in ascolto su un socket di rete e resta in attesa di nuovi datagrammi in arrivo. Questa tipologia di \textit{Ingress stage} risulta particolarmente utile in contesti dove è necessario elaborare flussi di dati provenienti da sorgenti esterne, quali sensori IoT, applicazioni remote, strumenti di monitoraggio di rete o qualsiasi sistema che comunichi tramite il protocollo \textit{UDP}. La natura \textit{connectionless} del protocollo \textit{UDP} consente di ricevere messaggi da molteplici mittenti senza la necessità di stabilire connessioni esplicite, rendendolo ideale per scenari ad alto \textit{throughput} dove la perdita occasionale di datagrammi è accettabile in cambio della bassa latenza.
+
+La libreria \textbf{goccia} mette a disposizione tre parametri di configurazione per lo \textit{UDP stage}: indirizzo IP, porta e dimensione del buffer. I primi due servono a impostare la sorgente da cui ricevere i pacchetti e dispongono di valori di default — \texttt{"0.0.0.0"} per l'indirizzo (che indica l'ascolto su tutte le interfacce di rete) e \texttt{20.000} per la porta. La dimensione del buffer utilizzato per leggere il payload dei datagrammi \textit{UDP} è impostata di default a $1474$ byte, poiché la dimensione massima per un payload Ethernet standard è di $1500$ byte, da cui si sottraggono $28$ byte relativi all'header \textit{UDP}.
+
+Internamente, lo \textit{stage} utilizza un puntatore a una connessione \textit{UDP} fornita dalla libreria standard del Go\cite{go:net:udpconn}. Tale connessione viene inizializzata nel metodo \texttt{Init} del ciclo di vita dello \textit{stage}. Una volta che l'inizializzazione ha esito positivo, è possibile procedere con l'esecuzione dello \textit{stage} tramite il metodo \texttt{Run}. Questo metodo implementa un ciclo \texttt{for} in cui viene richiamato il metodo \texttt{Read} (operazione bloccante) della connessione \textit{UDP}, il quale scrive i byte ricevuti in un buffer pre-allocato alla dimensione configurata. Parallelamente al ciclo principale, viene avviata una goroutine ausiliaria il cui compito è chiudere la connessione \textit{UDP} nel momento in cui viene ricevuta una notifica di cancellazione tramite \texttt{context.Context}. Una volta che la connessione è chiusa, il metodo \texttt{Read} ritorna un errore di tipo \texttt{net.ErrClosed}\cite{go:net:errclosed}, permettendo così al ciclo di uscire in modo ordinato.
+
+\begin{lstlisting}[language=Go, caption={Ciclo principale dello UDP stage (ingress/udp.go, metodo run)}]
+go func() {
+	<-ctx.Done()
+	us.conn.Close()
+}()
+
+buf := make([]byte, us.bufferSize)
+
+for {
+	// Read the UDP payload
+	n, err := us.conn.Read(buf)
+	if err != nil {
+		// Check if the connection is closed
+		if errors.Is(err, net.ErrClosed) {
+			// Check if caused by context cancellation
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+		}
+
+		// ...
+	}
+
+	// Handle the buffer and send the message ...
+}
+\end{lstlisting}
+
+Il tipo di messaggio prodotto dallo \textit{UDP stage} è descritto dalla struct \texttt{UDPMessage}, contenente due campi specifici: \texttt{Payload} e \texttt{PayloadSize}. Il messaggio implementa l'interfaccia \texttt{message.Serializable} definita nel package \texttt{message}, consentendo il collegamento di differenti tipi di \textit{Processor stage} a valle che accettano messaggi recanti buffer di byte. Al fine di soddisfare l'interfaccia, è sufficiente implementare il metodo \texttt{GetBytes}, il quale restituisce una slice di byte corrispondente al campo \texttt{Payload} del messaggio.
+
+\begin{lstlisting}[language=Go, caption={Metodo GetBytes di UDPMessage (ingress/udp.go)}]
+func (um *UDPMessage) GetBytes() []byte {
+	return um.Payload
+}
+\end{lstlisting}
+
+Poiché il payload è caratterizzato da dimensioni significative, al fine di ridurre il carico sul \textit{garbage collector} attraverso il riuso della memoria e l'eliminazione di continue allocazioni e deallocazioni di migliaia di oggetti, si è optato per l'utilizzo di un \textit{object pool} (\texttt{sync.Pool})\cite{go:sync:pool}. Gli oggetti \texttt{UDPMessage} vengono quindi pre-allocati nel pool e riutilizzati per ogni nuovo datagramma ricevuto, riducendo così la pressione sul sistema di gestione della memoria durante l'elaborazione ad alto throughput.
+
+Lo \textit{stage} espone due metriche destinate al monitoraggio del numero di messaggi e byte ricevuti, implementate tramite l'uso di contatori asincroni\cite{otel:metrics:asynccounter}. Tali metriche possono essere impiegate per monitorare il \textit{throughput} in ingresso alla \textit{pipeline}, fornendo visibilità sulla velocità di ricezione dei dati dalla sorgente di rete.
