@@ -1,0 +1,38 @@
+\subsection{Custom}
+
+Lo \textit{Custom stage} è un \textit{Processor stage} straordinariamente flessibile che consente agli utenti di implementare logica di elaborazione arbitraria tramite l'implementazione di un'interfaccia personalizzata. A differenza degli \textit{stage} predefiniti (\textit{Filter}, \textit{CAN}, \textit{CSV}), che implementano trasformazioni specifiche del dominio, il \textit{Custom stage} fornisce un'astrazione generica che delega completamente la logica di \textit{processing} all'utente, consentendo di elaborare qualunque tipo di messaggio e produrre qualunque tipo di output.
+
+Il cuore dello \textit{Custom stage} è l'interfaccia \texttt{CustomHandler}, che richiede di implementare quattro metodi:
+
+\begin{itemize}
+    \item \textbf{\texttt{Init}}: Invocato una sola volta al momento dell'inizializzazione dello \textit{stage}, prima che qualunque messaggio sia processato. Utile per inizializzare risorse, connessioni, cache, o stato interno specifico dell'applicazione.
+
+    \item \textbf{\texttt{Handle}}: Invocato per ogni messaggio in ingresso. Riceve il messaggio in input in sola lettura e un puntatore a quello di output pre-allocato, che l'handler deve popolare con il risultato della trasformazione. Questo design evita allocazioni per ogni messaggio e consente all'handler di controllare completamente l'output.
+
+    \item \textbf{\texttt{Close}}: Invocato una sola volta al momento della chiusura dello \textit{stage}, utile per rilasciare risorse acquisite in \texttt{Init}.
+
+    \item \textbf{\texttt{SetTelemetry}}: Utilizzato dalla \textit{pipeline} per fornire all'handler accesso al sottosistema di telemetria, permettendo all'utente di aggiungere log, metriche e \textit{span} di tracciamento personalizzati.
+\end{itemize}
+
+Lo \textit{stage} è implementato con tre parametri di tipo generici, consentendo composizioni arbitrarie: ad esempio, uno \textit{stage} potrebbe accettare messaggi \texttt{CannelloniMessage} e produrre messaggi \texttt{CANMessage}, oppure ricevere \texttt{CSVMessage} e produrre un tipo completamente personalizzato.
+
+Quando lo \textit{stage} è eseguito in modalità \textit{worker pool}, ogni \textit{worker} riceve una copia della istanza \texttt{CustomHandler} fornita. Questo significa che lo stato interno dell'handler non è condiviso tra \textit{worker} (a meno che non sia esplicitamente sincronizzato tramite meccanismi concorrenti quali \texttt{sync.Mutex} o canali). Questo design garantisce \textit{thread-safety} per costruzione, ma obbliga l'utente a gestire manualmente lo stato condiviso se necessario.
+
+La libreria fornisce \texttt{CustomHandlerBase}, una classe base che implementa già \texttt{Init}, \texttt{Close} e \texttt{SetTelemetry} con comportamenti di \textit{default} (\textit{no-op} per i primi due, semplice assegnamento per il terzo). Gli utenti possono ereditare da questa classe e implementare solamente il metodo \texttt{Handle}, semplificando il \textit{boilerplate}.
+
+\begin{lstlisting}[language=Go, caption={Esempio implementazione interfaccia CustomHandler}]
+type MyHandler struct{
+	processor.CustomHandlerBase
+}
+
+func (h *MyHandler) Handle(ctx context.Context, msgIn msgInType, msgOut msgOutType) error {
+	
+    // My custom logic ...
+    
+    return nil
+}
+\end{lstlisting}
+
+La configurazione dello \textit{Custom stage} include un campo \texttt{Name} che identifica univocamente lo \textit{stage} nella telemetria e nella tracciatura, consentendo di distinguere tra molteplici \textit{stage} personalizzati nella stessa \textit{pipeline}. Lo \textit{stage} supporta inoltre sia \textit{Single Worker Mode} che \textit{Worker Pool Mode}, fornendo all'utente il controllo sul livello di parallelismo.
+
+In sintesi, il \textit{Custom stage} è lo strumento ideale per scenari in cui la logica di elaborazione è specifica dell'applicazione, dinamica, o semplicemente troppo niche per giustificare l'implementazione di uno \textit{stage} predefinito. Esempi includono: \textit{machine learning inference}, trasformazioni semantiche complesse, aggregazioni statistiche, deduplicazione, arricchimento dati da fonti esterne, o qualunque operazione personalizzata di dominio.

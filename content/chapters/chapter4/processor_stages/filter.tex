@@ -1,0 +1,7 @@
+\subsection{Filter}
+
+Lo \textit{Filter stage} è un \textit{Processor stage} generico che applica un predicato di filtraggio ai messaggi in transito nella \textit{pipeline}, decidendo per ciascuno se debba proseguire verso gli \textit{stage} successivi oppure essere scartato. Opera quindi come un filtro basato su una funzione booleana definita dall'utente, che incapsula la logica di accettazione/rifiuto a livello applicativo (ad esempio: tenere solo messaggi con un certo campo valorizzato, scartare quelli di errore, limitare il flusso a un sottoinsieme di segnali rilevanti).
+
+Dal punto di vista dell'esecuzione, il \textit{Filter stage} invoca la funzione di filtro sul messaggio in ingresso: se il predicato restituisce \texttt{false}, il messaggio viene marcato come \textit{dropped} tramite il metodo dedicato nel messaggio e non sarà processato dagli \textit{stage} successivi; se restituisce \texttt{true}, il messaggio viene semplicemente propagato in uscita senza modifiche. In questo modo lo \textit{stage} è completamente trasparente rispetto al contenuto e si limita ad agire come ``valvola'' di selezione.
+
+Grazie all'uso di \textit{generics} sul tipo \texttt{T}, il \textit{Filter stage} può essere inserito in qualunque punto della \textit{pipeline}, indipendentemente dal tipo di messaggio in transito. Tipici esempi includono l'applicazione di filtri su messaggi \textit{CAN} decodificati, su righe \textit{CSV} strutturate, o su eventi provenienti da \textit{Ingress stage} differenti, senza necessità di adattatori intermedi.
