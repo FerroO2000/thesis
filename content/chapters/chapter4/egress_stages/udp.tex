@@ -1,0 +1,15 @@
+\subsection{UDP Egress}
+
+Lo \textit{UDP stage} è un \textit{Egress stage} specializzato nell'invio di messaggi verso un endpoint remoto tramite il protocollo \textit{UDP}. Contrariamente allo \textit{UDP Ingress stage}, che riceve dati grezzi da una socket \textit{UDP}, l'\textit{UDP Egress stage} conclude la \textit{pipeline} trasmettendo messaggi elaborati a una destinazione esterna, fungendo da punto di uscita per il flusso di dati.
+
+La configurazione dello \textit{stage} è minimale: richiede semplicemente l'indirizzo IP di destinazione (con \textit{default} 127.0.0.1) e la porta di destinazione (\textit{default} 20000).
+
+L'\textit{UDP Egress stage} può ricevere messaggi serializzati da qualunque \textit{Processor stage} che produca output serializzabile: dati \textit{CSV}, messaggi \textit{CAN} decodificati, output di elaborazioni personalizzate, eccetera. Non vi è accoppiamento di tipo; l'unico vincolo è che il messaggio implementi l'interfaccia \texttt{Serializable}.
+
+Il cuore dello \textit{stage} è il suo \textit{worker}, il quale si occupa di estrarre il payload serializzato dal messaggio tramite \texttt{GetBytes()} e di trasmetterlo sul socket \textit{UDP} mediante \texttt{conn.Write}\cite{go:net:udpconn:write}.
+
+Se l'operazione di scrittura fallisce (ad esempio, per perdita di connessione, \textit{timeout} di rete, o satura del \textit{buffer} del kernel), il \textit{worker} registra l'errore ma non interrompe l'elaborazione: il messaggio è semplicemente marcato come fallito nella metrica \texttt{delivering\_errors}. Questo riflette la natura \textit{best-effort} di \textit{UDP}: non vi è garanzia di consegna, ritrasmissione automatica, o conferma di ricezione. È responsabilità dello \textit{stage} o dell'applicazione a monte gestire affidabilità se richiesta (ad esempio, tramite ACK a livello applicativo o ricezione esplicita).
+
+Come altri \textit{Egress/Processor stage}, l'\textit{UDP stage} supporta sia \textit{Single Worker Mode} che \textit{Worker Pool Mode}. In modalità \textit{pool}, il \textit{framework} gestisce automaticamente lo \textit{scaling} dei \textit{worker} in base al carico, usando la stessa connessione \textit{UDP} condivisa tra tutti i \textit{worker}. Questo consente di sfruttare il parallelismo \textit{multicore} per aumentare il \textit{throughput} di trasmissione, purché il kernel e l'hardware di rete lo supportino.
+
+In sintesi, l'\textit{UDP Egress stage} incarna il paradigma di esportazione minimalista e ad alte prestazioni: prende un flusso di messaggi elaborati e li spedisce direttamente a una destinazione esterna usando il protocollo \textit{UDP}, senza \textit{buffering} persistente, rielaborazione, o garanzie di consegna. È ideale per scenari dove la velocità è prioritaria rispetto all'affidabilità, come telemetria \textit{real-time}, \textit{streaming} di dati, o distribuzione di messaggi a sistemi esterni a bassa latenza.
