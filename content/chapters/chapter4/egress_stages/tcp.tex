@@ -1,0 +1,15 @@
+\subsection{TCP Egress}
+
+Lo \textit{TCP Egress stage} è un \textit{Egress stage} specializzato nell'invio di messaggi verso un endpoint remoto tramite una connessione \textit{TCP} persistente. A differenza dello \textit{UDP Egress stage}, che invia datagrammi isolati senza stato, il \textit{TCP Egress stage} mantiene una connessione bidirezionale affidabile con il destinatario, garantendo consegna ordinata e completa di tutti i dati.
+
+La configurazione dello \textit{TCP Egress stage} è simile a quella dello \textit{UDP Egress stage}, ma con un parametro aggiuntivo: \texttt{WriteTimeout}, che specifica il tempo massimo di attesa per una singola operazione di scrittura (\textit{default} 10 secondi). Questo timeout protegge da situazioni di deadlock dove la connessione è ancora aperta ma il destinatario non legge dati (ad esempio, a causa di crash o sovraccarico).
+
+Contrariamente a \textit{UDP} (\textit{best-effort}), \textit{TCP} garantisce che ogni byte trasmesso arriverà al destinatario nell'ordine esatto, oppure che un errore sia riportato. Se la connessione si interrompe o il destinatario non legge i dati entro il timeout configurato, il \textit{worker} registra un errore e la metrica \texttt{delivering\_errors} è incrementata.
+
+Il \textit{worker} dello \textit{stage} estrae il payload serializzato dal messaggio in input e lo trasmette tramite \texttt{conn.Write}\cite{go:net:tcpconn:write} come sequenza continua di byte, senza delimitatori impliciti: se il messaggio necessita di delimitazione (ad esempio, newline), deve essere già incluso nel payload serializzato dallo \textit{stage} precedente.
+
+Il \textit{TCP Egress stage} supporta solamente la \textit{Single Worker Mode}, in quanto, sebbene il metodo \texttt{conn.Write} possa essere chiamato da goroutine differenti in maniera sicura, il contenuto dei dati trasmessi potrebbe intervallarsi. Per esempio, se una goroutine scrivesse ``hello'' e un'altra ``word'', il dato trasmesso potrebbe essere una sequenza del tipo ``heworldllo''.
+
+Lo \textit{TCP Egress stage} è ideale per scenari dove l'affidabilità è critica: trasmissione di comandi verso sistemi embedded, esportazione di dati strutturati verso data warehouse, o comunicazione con sistemi remoti che richiedono ricezione garantita.
+
+In sintesi, il \textit{TCP Egress stage} rappresenta l'alternativa affidabile allo \textit{UDP Egress stage}: conclude la \textit{pipeline} trasmettendo messaggi elaborati tramite una connessione \textit{TCP} persistente, garantendo consegna ordinata e completa, con timeout configurabile per proteggere da blocchi indefiniti.
