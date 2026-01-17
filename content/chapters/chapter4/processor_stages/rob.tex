@@ -1,1 +1,111 @@
-\subsection{ROB}
+\subsection{Reorder Buffer}
+
+Lo \textit{Reorder Buffer} (ROB) \textit{stage} è specializzato nel riordinamento di messaggi che arrivano fuori ordine, garantendo che vengano elaborati e inoltrati in ordine sequenziale basato su un numero di sequenza contenuto nei messaggi stessi. Questo \textit{stage} può essere eseguito solamente in \textit{Single Worker Mode}, poiché il riordinamento richiede uno stato coerente che non può essere facilmente sincronizzato tra \textit{worker} paralleli.
+
+Il cuore del ROB è un'architettura \textit{dual-buffer}: il \texttt{primary buffer} e l'\texttt{auxiliary buffer}. Il \texttt{primary buffer} è più piccolo ed è ottimizzato per il caso comune dove i messaggi arrivano in ordine o con ritardi brevi. L'\texttt{auxiliary buffer} è più grande e accoglie messaggi che arrivano molto fuori ordine. I due buffer operano in tandem: quando l'\texttt{auxiliary buffer} raggiunge un certo livello di pienezza (configurabile tramite \texttt{FlushTreshold}, \textit{default} 30\%), il \texttt{primary buffer} è interamente liberato nel connettore di output e il contenuto dell'\texttt{auxiliary buffer} è trasferito nel \texttt{primary buffer}.
+
+<disegno schema doppio ring buffer>
+
+Quando un messaggio arriva allo \textit{stage}, viene passato al ROB tramite il metodo \texttt{Enqueue}. Il ROB classifica il risultato dell'operazione di enqueue in una di quattro categorie:
+
+\begin{itemize}
+    \item \textit{In-Order}: il numero di sequenza corrisponde al prossimo numero atteso. Il messaggio è immediatamente inoltrato al connettore di output senza buffering. Questo rappresenta il caso ideale (\textit{fast path}).
+    \item \textit{Primary}: il numero di sequenza è fuori ordine ma rientra nella finestra del \texttt{primary buffer}. Il messaggio è inserito in posizione corretta all'interno del buffer. In questo caso, il messaggio non rientra nel caso ideale, ma l'overhead rimane comunque contenuto.
+    \item \textit{Auxiliary}: il numero di sequenza è oltre la finestra del \texttt{primary buffer} ma rientra nella finestra dell'\texttt{auxiliary buffer}. Il messaggio è accodato nell'\texttt{auxiliary buffer}, ricadendo nella peggior casistica in termini di velocità.
+    \item \textit{Error}: il numero di sequenza è invalido (duplicato, troppo grande, fuori della finestra complessiva). Il messaggio è scartato e un errore è registrato nelle metriche opportune.
+\end{itemize}
+
+\begin{lstlisting}[language=Go, caption={Logica di Enqueue del ROB stage (internal/rob/rob.go, metodo Enqueue)}]
+func (rob *ROB[T]) Enqueue(item T) (EnqueueStatus, error) {
+	seqNum := item.GetSequenceNumber()
+
+	// Check the sequence number validity
+	if !rob.primaryBuf.isValidSize(seqNum) {
+		return EnqueueStatusErr, ErrSeqNumTooBig
+	}
+
+	// Initialize the ROB if Enqueue is called for the first time ...
+
+	// Try to enqueue the item in the primary buffer
+	status, err := rob.enqueuePrimary(item)
+	if err == nil {
+		return status, nil
+	}
+
+	if errors.Is(err, ErrSeqNumDuplicated) {
+		return EnqueueStatusErr, err
+	}
+
+	// Enqueue the item in the auxiliary buffer
+	err = rob.enqueueAuxiliary(item)
+	return EnqueueStatusAuxiliary, err
+}
+\end{lstlisting}
+
+Entrambi i buffer mantengono una finestra di numeri di sequenza validi. La finestra del \texttt{primary buffer} copre il primo range (fino a \texttt{PrimaryBufferSize}), mentre la finestra dell'\texttt{auxiliary buffer} copre da \texttt{PrimaryBufferSize} alla dimensione del buffer ausiliario, \texttt{AuxiliaryBufferSize}. Quando uno dei buffer esaurisce i numeri di sequenza disponibili (ad esempio, tutti i messaggi nella finestra sono stati processati), la finestra si sposta in avanti incrementando il numero di sequenza atteso successivo. Questo è implementato tramite il metodo \texttt{shiftLeft} che compatta i dati nel buffer e azzera gli ultimi slot.
+
+Per gestire efficientemente lo spazio nel buffer e identificare slot vuoti vs occupati, il ROB utilizza una \textit{bitmap}: un array di byte dove ogni bit rappresenta uno slot nel buffer. Operazioni come \texttt{set} e \texttt{isSet} consentono di tracciare quali posizioni contengono messaggi e quali sono vuote con complessità \(O(1)\). Il metodo \texttt{getConsecutive} scansiona la bitmap a partire dall'indice 0 e conta quanti bit consecutivi sono impostati, fornendo il numero di messaggi pronti per il dequeue sequenziale.
+
+Un aspetto importante del ROB è il \textit{timeSmoother}, che implementa un \textit{Double Exponential Smoother} (noto anche come \textit{Holt's Linear Exponential Smoothing}, descritto nella sezione \ref{sec:double-exponential-smoothing}) per regolare e levigare i timestamp associati ai messaggi. A differenza di tecniche di smoothing tradizionali che utilizzano un singolo parametro di smorzamento, il \textit{Double Exponential Smoother} mantiene due componenti di stato: il \textit{level} (stima del valore attuale) e il \textit{trend} (stima della velocità di cambiamento).
+
+Lo smoothing può essere abilitato o disabilitato tramite un apposito parametro di configurazione. Quando abilitato, il smoother applica due fattori di smorzamento: \texttt{EstimatorAlpha} (fattore di smoothing dei dati, \textit{default} 0.8) e \texttt{EstimatorBeta} (fattore di smoothing del trend, \textit{default} 0.5). Il \textit{level} è aggiornato combinando il timestamp osservato con una previsione basata sul \textit{level} e il \textit{trend} precedenti, scalati dalla distanza sequenziale tra il messaggio corrente e quello precedente. Il \textit{trend} è aggiornato combinando il cambiamento nel \textit{level} con il \textit{trend} precedente, permettendo al smoother di adattarsi a variazioni dinamiche nella frequenza di arrivo dei messaggi. Un vincolo di monotonia garantisce che il timestamp aggiustato non retrocede mai nel tempo, preservando la coerenza temporale del flusso di output indipendentemente dall'ordine di arrivo dei messaggi.
+
+\begin{lstlisting}[language=Go, caption={Calcolo del timestamp corretto nel ROB stage (internal/rob/time\_smoother.go, metodo adjust)}]
+func (ts *timeSmoother[T]) adjust(item T) {
+	// Extract the current receive time
+	recvTime := item.GetReceiveTime()
+	currValue := float64(recvTime.UnixNano())
+
+	// Extract the current sequence number
+	// and the distance to the previous one
+	seqNum := item.GetSequenceNumber()
+	ts.prevSeqNum = seqNum
+	distance := getSeqNumDistance(seqNum, ts.prevSeqNum, ts.maxSeqNum)
+
+	// Force the distance to be at least 1
+	if distance == 0 {
+		distance = 1
+	}
+
+	// Estimate the timestamp value and convert to a timestamp
+	estimatedValue := ts.estimator.estimate(currValue, distance)
+	currTimestamp := time.Unix(0, int64(estimatedValue))
+
+	// Enforce monotonicity
+	if currTimestamp.Before(ts.prevTimestamp) {
+		currTimestamp = ts.prevTimestamp
+	} else {
+		ts.prevTimestamp = currTimestamp
+	}
+
+	item.SetTimestamp(currTimestamp)
+}
+\end{lstlisting}
+
+\begin{lstlisting}[language=Go, caption={Implememtazione Double Exponential Smoothing (internal/rob/time\_smoother.go, metodo estimate)}]
+func (dee *doubleExponentialEstimator) estimate(value float64, n uint64) float64 {
+	// ...
+
+	// Get the forecasted value based on the previous level and trend
+	prevForecasted := dee.prevLevel + dee.prevTrend*float64(n)
+
+	// Calculate the current level and trend to be used
+	// by the next item
+	currLevel := dee.alpha*value + (1-dee.alpha)*(prevForecasted)
+	currTrend := dee.beta*(currLevel-dee.prevLevel) + (1-dee.beta)*dee.prevTrend
+
+	dee.prevLevel = currLevel
+	dee.prevTrend = currTrend
+
+	dee.estimateCount++
+	return prevForecasted
+}
+\end{lstlisting}
+
+Il ROB implementa un meccanismo di reset basato su timeout. Durante l'esecuzione, lo \textit{stage} legge i messaggi in ingresso con un timeout pari a \texttt{ResetTimeout} (\textit{default} 100 ms) e se nessun messaggio arriva entro questo periodo, il buffer viene resettato e tutti i messaggi presenti al suo interno vengono inoltrati allo \textit{stage} successivo. Questo protegge da situazioni di deadlock dove un messaggio critico per il riordinamento non arriva mai, causando un accumulo indefinito di messaggi nei buffer. Il reset è inoltre eseguito quando il connettore di input si chiude o quando il contesto di esecuzione è cancellato (\texttt{context.Done}).
+
+Lo \textit{stage} traccia metriche granulari per ogni categoria di enqueue, come il numero di messaggi ricevuti in ordine, quelli fuori ordine salvati nel \texttt{primary}/\texttt{auxiliary buffer}, infine il numero di errori e i reset.
+
+Il ROB \textit{stage} è essenziale in scenari dove il flusso di messaggi in ingresso subisce riordinamento dovuto a latenze variabili o buffering di rete. Esempi includono: raccolta di pacchetti trasmessi con protocolli lossy come \textit{UDP}, i quali potrebbero essere ricevuti non in ordine, o telemetria \textit{real-time} da sistemi remoti dove la variabilità di latenza è significativa.
+
+In sintesi, il ROB \textit{stage} è uno strumento sofisticato che trasforma un flusso potenzialmente disordinato in un flusso ordinato e temporalmente coerente, combinando tecniche di buffering adattivo, bitmap compatte per efficienza spaziale, \textit{Double Exponential Smoothing} statistico, e timeout intelligenti per garantire output di alta qualità anche in condizioni avverse di rete, latenza, e sincronizzazione temporale.

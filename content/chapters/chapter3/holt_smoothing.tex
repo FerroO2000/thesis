@@ -1,0 +1,91 @@
+\section{Il Metodo di Holt per il \textit{Double Exponential Smoothing}}
+\label{sec:double-exponential-smoothing}
+
+\subsection{Fondamenti Teorici e Motivazione}
+
+Il metodo di Holt, introdotto da Holt nel 1957~\cite{Holt1957}, estende il \textit{simple exponential smoothing} (SES) per permettere la previsione e l'analisi di serie temporali che presentano un andamento di tendenza lineare. Mentre il SES si limita a modellare una componente di livello costante e risulta inadatto a serie con \textit{trend} manifesto, il metodo di Holt introduce una componente aggiuntiva dedicata alla stima della tendenza (\textit{slope}), rendendo il modello maggiormente adatto all'elaborazione di dati con comportamento non stazionario.
+
+Nel contesto specifico dell'applicazione proposta---ovvero la stima e la correzione di \textit{timestamp} di messaggi ricevuti da \textit{socket} UDP---il metodo di Holt fornisce un meccanismo efficiente per separare la componente di livello (il \textit{timestamp} ``smussato'', depurato dal \textit{jitter}) dalla componente di \textit{trend} (il \textit{rate} di crescita sistematico dei \textit{receive time}). Poiché i \textit{timestamp} di ricezione seguono un \textit{trend} lineare crescente, il metodo di Holt è particolarmente adatto a catturare questa dinamica e a fornire stime robuste nonostante le fluttuazioni dovute al \textit{jitter} di rete~\cite{holt:jitter:compensation}.
+
+\subsection{Formulazione Matematica}
+
+Il metodo di Holt per il \textit{double exponential smoothing} si basa su un'equazione di previsione e due equazioni di \textit{smoothing}, una per il livello e una per la tendenza~\cite{Holt1957,Hyndman2014,HyndmanAthanasopoulos2022,JohnGalt2024}:
+
+\textbf{Equazione di Previsione:}
+\begin{equation}
+\hat{y}_{t+h|t} = s_t + h \cdot b_t
+\end{equation}
+
+\textbf{Equazione di Livello (\textit{Level Smoothing}):}
+\begin{equation}
+s_t = \alpha y_t + (1 - \alpha)(s_{t-1} + b_{t-1})
+\end{equation}
+
+\textbf{Equazione di Tendenza (\textit{Trend Smoothing}):}
+\begin{equation}
+b_t = \beta^* (s_t - s_{t-1}) + (1 - \beta^*) b_{t-1}
+\end{equation}
+
+dove:
+\begin{itemize}
+    \item $y_t$ è l'osservazione (o misurazione) effettiva al tempo $t$
+    \item $s_t$ denota la stima del livello della serie al tempo $t$, rappresentante il ``valore smussato'' dell'osservazione corrente
+    \item $b_t$ denota la stima della tendenza (\textit{slope}) della serie temporale al tempo $t$, ossia il \textit{rate} di variazione tra periodi consecutivi
+    \item $\alpha$ è il \textbf{parametro di \textit{smoothing} per il livello}, con $0 \leq \alpha \leq 1$
+    \item $\beta^*$ è il \textbf{parametro di \textit{smoothing} per la tendenza}, con $0 \leq \beta^* \leq 1$
+    \item $h$ è l'orizzonte di previsione (numero di passi temporali avanti)
+    \item $\hat{y}_{t+h|t}$ è la previsione al tempo $t$ per $h$ periodi in avanti
+\end{itemize}
+
+\subsection{Interpretazione Componenziale}
+
+L'equazione di livello mostra che $s_t$ rappresenta una media ponderata tra l'osservazione corrente $y_t$ e la ``previsione a un passo'' della serie al tempo $t-1$, data dalla somma della stima precedente del livello e della stima precedente della tendenza: $s_{t-1} + b_{t-1}$~\cite{Hyndman2014,HyndmanAthanasopoulos2022}. Il parametro $\alpha$ controlla il grado di reattività del livello rispetto alle nuove osservazioni: un valore di $\alpha$ prossimo a 1 attribuisce peso maggiore ai dati recenti, mentre un valore prossimo a 0 privilegia le stime precedenti.
+
+L'equazione di tendenza stima $b_t$ come media ponderata tra due fonti di informazione: la differenza tra i due ultimi livelli stimati ($s_t - s_{t-1}$), che fornisce una stima della tendenza nel periodo corrente, e la stima precedente della tendenza ($b_{t-1}$)~\cite{Hyndman2014}. Il parametro $\beta^*$ regola quanto rapidamente la tendenza stimata si adatta a variazioni nel \textit{rate} di cambiamento: valori elevati di $\beta^*$ consentono alla pendenza di mutare più rapidamente tra periodi consecutivi, mentre valori bassi generano stime di tendenza più stabili.
+
+Il metodo è denominato ``\textit{double exponential smoothing}'' poiché impiega due parametri di \textit{smoothing} ($\alpha$ e $\beta^*$), in contrasto con il SES che ne utilizza uno solo ($\alpha$)~\cite{Hyndman2014,HyndmanAthanasopoulos2022}.
+
+\subsection{Condizioni Iniziali}
+
+L'applicazione del metodo di Holt richiede l'inizializzazione di $s_0$ (il livello iniziale) e $b_0$ (la tendenza iniziale)~\cite{Holt2020,Hyndman2014}. Quando $t = 1$, le equazioni di \textit{smoothing} non possono essere applicate direttamente poiché mancano i valori precedenti. Le pratiche comuni per inizializzare questi valori includono:
+
+\begin{enumerate}
+    \item \textbf{Inizializzazione semplice:} porre $s_0 = y_1$ (il primo valore osservato)
+    \item \textbf{Stima della tendenza iniziale:} calcolare $b_0$ come la differenza media tra coppie di osservazioni iniziali, ad esempio $b_0 = \frac{y_2 - y_1}{\Delta t}$, oppure utilizzare una regressione lineare su un sottoinsieme iniziale dei dati
+\end{enumerate}
+
+Alternativamente, $s_0$ e $b_0$ possono essere stimati simultaneamente insieme ai parametri $\alpha$ e $\beta^*$ minimizzando la somma dei quadrati degli errori (SSE) sull'intera serie~\cite{Hyndman2014,HyndmanAthanasopoulos2022}.
+
+\subsection{Correzione dei \textit{Timestamp} di Ricezione}
+
+Nel contesto del presente lavoro, il metodo di Holt è impiegato per stimare e correggere il \textit{timestamp} di messaggi ricevuti, in particolare quando i messaggi arrivano fuori ordine o affetti da \textit{jitter}. In questo scenario applicativo:
+
+\begin{itemize}
+    \item \textbf{$y_t$ (\textit{osservazione}):} il \textit{receive time} effettivo di un pacchetto al tempo di ricezione $t$, affetto da \textit{jitter} causato da variazioni nella latenza di trasmissione
+    \item \textbf{$s_t$ (\textit{livello smussato}):} la stima del \textit{timestamp} ``corretto'', depurato dalle fluttuazioni di \textit{jitter} ad alta frequenza
+    \item \textbf{$b_t$ (\textit{tendenza}):} la stima del \textit{rate} di crescita sistematico dei \textit{receive time}, catturando il \textit{trend} lineare intrinseco della sequenza di messaggi
+\end{itemize}
+
+La componente di livello $s_t$ funge da stimatore robusto del \textit{timestamp} di ricezione corretto, mentre la componente di tendenza $b_t$ cattura il \textit{rate} medio di arrivo dei pacchetti sulla connessione, permettendo di discriminare efficacemente tra variazioni casuali dovute al \textit{jitter} e la dinamica sistematica della ricezione.
+
+Questa decomposizione è particolarmente vantaggiosa rispetto a metodi alternativi (come il \textit{Kalman filter} esteso) in quanto:
+
+\begin{itemize}
+    \item \textbf{Semplicità computazionale:} il metodo di Holt richiede solo operazioni aritmetiche elementari, riducendo la complessità e l'overhead, quindi diminuendo la latenza~\cite{holt:jitter:compensation}
+    \item \textbf{Robustezza rispetto al \textit{jitter}:} la separazione esplicita della componente di tendenza consente di discriminare efficacemente tra \textit{jitter} (variazioni ad alta frequenza) e \textit{trend} lineare (variazioni lente e sistematiche)~\cite{holt:jitter:compensation}
+    \item \textbf{Efficienza numerica:} non richiede inversioni di matrici, a differenza dei filtri di Kalman~\cite{holt:jitter:compensation}
+\end{itemize}
+
+Ricerche comparative hanno dimostrato che il metodo di Holt per la compensazione del \textit{jitter} opera circa 100 volte più velocemente rispetto al \textit{Kalman filter} esteso (EKF), pur mantenendo o addirittura migliorando le prestazioni di riduzione del \textit{jitter} (circa 18-20\% di miglioramento relativo)~\cite{holt:jitter:compensation}.
+
+\subsection{Applicazioni Pratiche}
+
+Nel contesto pratico di sistemi di comunicazione in tempo reale, il metodo di Holt trova applicazione diretta nel filtraggio e nella correzione dei \textit{timestamp} di ricezione (\textit{receive time}).
+
+\textbf{Filtraggio del \textit{Jitter} di Ricezione:} Il \textit{jitter} nei \textit{timestamp} di ricezione è causato da variazioni nella latenza di trasmissione dovute a congestione di rete, \textit{routing} variabile, e variabilità della velocità di elaborazione nei nodi intermedi. L'equazione di livello del metodo di Holt filtra efficacemente queste fluttuazioni ad alta frequenza, estraendo il valore ``vero'' del \textit{timestamp} depurato dal \textit{jitter}.
+
+\textbf{Stima del \textit{Trend} Lineare di Arrivo:} In una sequenza di messaggi ricevuti in modo continuo, i \textit{receive time} seguono naturalmente un \textit{trend} lineare crescente: ogni messaggio arriva approssimativamente a intervalli regolari. Il metodo di Holt cattura questa dinamica nella componente di tendenza $b_t$, che rappresenta il \textit{rate} medio di arrivo dei pacchetti. Questa stima permette di stabilire se un pacchetto in arrivo tardivo è coerente con il \textit{trend} osservato o rappresenta una anomalia.
+
+\textbf{Ricezione \textit{Out-of-Order}:} Utile per i protocolli, quali UDP, che non garantiscono l'arrivo ordinato dei pacchetti. Quando, per esempio, un'applicazione riceve pacchetti fuori sequenza, il metodo di Holt consente di stimare il \textit{timestamp} corretto di ricezione per ciascun pacchetto basandosi sia sulla cronologia di arrivo precedente che sul \textit{trend} lineare osservato, facilitando il riordinamento logico dei messaggi.
+
+La semplicità computazionale del metodo di Holt lo rende particolarmente adatto a questi scenari, dove ogni pacchetto ricevuto deve essere elaborato con latenza minima per non introdurre ritardi significativi nelle applicazioni tempo-reale~\cite{holt:jitter:compensation}.
