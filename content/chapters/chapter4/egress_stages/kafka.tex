@@ -1,0 +1,11 @@
+\subsection{Kafka Egress Stage}
+
+Lo \textit{Kafka Egress stage} è uno \textit{Egress stage} specializzato nell'invio di messaggi verso un broker \textit{Apache Kafka}. Lo stage conclude la pipeline inviando messaggi a topic \textit{Kafka} con semantiche di consegna affidabili e configurabili, fungendo da punto di uscita per il flusso di dati verso un sistema \textit{event-driven} distribuito.
+
+La configurazione dello \textit{Kafka Egress stage} riprende i campi definiti dalla libreria \textit{kafka-go} nella sua struttura \texttt{kafka.Writer}~\cite{segmentio:kafka-go:writer}, in maniera speculare a come viene fatto nell'omonimo stage di \textit{Ingress}. Il parametro fondamentale resta quello del campo \texttt{Brokers}, che definisce gli endpoint a cui connettersi. Contrariamente allo stage di \textit{Ingress}, i topic sono definiti all'interno del messaggio, permettendo di scegliere a \textit{runtime} dove indirizzare il messaggio.
+
+La logica dello stage è minimale, in quanto viene semplicemente preso il messaggio in ingresso, viene creata la struttura usata per contenere le informazioni riguardanti gli header, la chiave, il \texttt{value} (payload) e il topic in cui il messaggio deve essere inoltrato. Infine, viene richiamata la funzione \texttt{WriteMessages}~\cite{segmentio:kafka-go:writemessages} che si occuperà di passare il dato al broker \textit{Kafka}.
+
+Come altri \textit{Egress stage}, il \textit{Kafka Egress stage} supporta sia \textit{Single Worker Mode} che \textit{Worker Pool Mode}, poiché il writer è \textit{thread-safe} e gestisce internamente la serializzazione e il batching dei messaggi.
+
+Un aspetto distintivo del \textit{Kafka Egress stage} è l'integrazione nativa del tracciamento distribuito. Ogni messaggio inviato include nel suo header \textit{Kafka} il contesto di trace (trace ID, span ID, baggage) estratto dal messaggio in transito, consentendo la propagazione del contesto di esecuzione end-to-end attraverso il cluster \textit{Kafka} verso sistemi consumer a valle, abilitando così la correlazione completa dei flussi di dati in architetture microservizi.
