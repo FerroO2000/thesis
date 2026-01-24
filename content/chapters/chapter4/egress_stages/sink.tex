@@ -1,0 +1,3 @@
+\subsection{Sink Egress Stage}
+
+Lo \textit{Sink Egress stage} rappresenta il caso limite di uno stage di esportazione: non persiste, non trasmette, non scrive alcun dato verso destinazioni esterne. Invece, consuma semplicemente tutti i messaggi in ingresso, li distrugge, e prosegue. È concepito esclusivamente per scopi di testing e benchmarking, permettendo di valutare le prestazioni della pipeline senza l'overhead di I/O verso \textit{filesystem}, rete, o database.

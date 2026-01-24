@@ -1,0 +1,17 @@
+\subsection{QuestDB Egress Stage}
+
+Lo \textit{QuestDB Egress stage} rappresenta uno stage di esportazione progettato per persistere messaggi elaborati verso \textit{QuestDB}~\cite{questdb:official}, un database time-series colonnare ad alte prestazioni.
+
+La configurazione dello stage presenta un unico campo specifico, ovvero l'indirizzo di riferimento del database. La semplicità della configurazione rispecchia l'approccio di \textit{QuestDB}: la libreria client \textit{go-questdb-client}~\cite{questdb:go-client} gestisce internamente aspetti quali il pooling delle connessioni, il flushing automatico dei messaggi, e la ricongiunzione in caso di fallimento.
+
+Lo stage riceve messaggi del tipo \texttt{QuestDBMessage}, che incapsula una collezione di righe (rows) da inserire. Ciascuna riga è associata a una tabella specifica e contiene simboli (symbol columns) e colonne (value columns). I simboli rappresentano colonne di tipo categorico in \textit{QuestDB}, ottimizzate per l'indicizzazione e la deduplicazione: ogni simbolo deve essere inserito prima di qualunque altra colonna della riga. Le colonne rappresentano dati di tipo vario: booleano, intero, float, stringa, timestamp, e long integer (\textit{big.Int}).
+
+Lo stage, per ciascun messaggio ricevuto, elabora tutte le righe contenute tramite un iteratore. Per ogni riga, seleziona la giusta tabella, poi inserisce tutti i simboli prima di inserire i valori delle colonne. Una volta caricati tutti i valori delle colonne, viene impostato il timestamp della riga.
+
+Lo stage supporta \textit{Worker Pool Mode} (oltre a \textit{Single Worker Mode}). In modalità pool, molteplici worker condividono lo stesso \texttt{LineSenderPool}~\cite{questdb:go-client:linesenderpool}, dal quale ciascun worker estrae un sender indipendente. Poiché il pool garantisce \textit{thread-safety}, il parallelismo multicore è sfruttato per incrementare il throughput di inserimento verso \textit{QuestDB}. Il pool gestisce automaticamente il flushing dei buffer quando la soglia di autoflush è raggiunta, coordinando gli inserimenti provenienti da molteplici worker in modo trasparente. Se il pool rileva fallimenti di connessione, applica retry automatici con timeout configurato, garantendo resilienza a livello di trasporto.
+
+Lo stage espone una singola metrica di monitoraggio che tiene traccia del numero di righe inserite.
+
+Il \textit{QuestDB Egress stage} è ideale per scenari dove la persistenza strutturata in un database time-series è prioritaria. Un esempio classico di tale utilizzo è l'implementazione di un sistema di telemetria \textit{real-time}, per inviare metriche, trace e log strutturati verso \textit{QuestDB} per analisi e visualizzazione su dashboard. Questo è anche il principale caso d'utilizzo che ha portato alla creazione dello stesso progetto \textit{goccia}.
+
+In sintesi, il \textit{QuestDB Egress stage} incarna il paradigma di persistenza strutturata e ad alte prestazioni: prende un flusso di messaggi elaborati e li inserisce in una banca dati time-series, offrendo tipizzazione di dati, pooling di connessioni, flushing automatico, e supporto a molteplici tabelle e simboli categorici. È il componente ideale per conclusioni di pipeline che richiedono persistenza analitica, query \textit{real-time}, e integrazione con ecosistemi di \textit{business intelligence} e monitoraggio.
