@@ -1,14 +1,75 @@
 \section{Connector}
 
-Affinché una \textit{pipeline} possa effettivamente operare, una volta creati gli \textit{stage}, è necessario metterli in comunicazione tramite un componente capace di trasferire i dati da uno \textit{stage} al successivo. Tale componente deve essere \textit{thread safe}, poiché ogni \textit{stage} viene eseguito su una goroutine distinta, e deve disporre di un meccanismo di buffer per mitigare gli effetti della \textit{backpressure}, fenomeno che si manifesta quando uno \textit{stage} a valle elabora i dati più lentamente del precedente, causando un rallentamento a catena.
+Affinché una pipeline possa effettivamente operare, una volta creati gli stage, è necessario metterli in comunicazione tramite un componente capace di trasferire i dati da uno stage al successivo. Tale componente deve essere \emph{thread safe}, poiché ogni stage viene eseguito su una goroutine distinta, e deve disporre di un meccanismo di \emph{buffer} per mitigare gli effetti della \emph{backpressure}, fenomeno che si manifesta quando uno stage a valle elabora i dati più lentamente del precedente, causando un rallentamento a catena.
 
-Il linguaggio Go fornisce, a tal fine, i channel (anche bufferizzati) come tipo primitivo per la comunicazione tra goroutine. Tuttavia, la libreria \textbf{goccia} adotta un approccio differente, basato su un \textit{ring buffer} lock-free, con l’obiettivo di massimizzare il \textit{throughput}. In particolare, si è optato per un’implementazione \textit{Single Producer Single Consumer} (SPSC), poiché la relazione tra gli \textit{stage} della pipeline è di tipo 1:1. La versione \textit{Multiple Producer Multiple Consumer} (MPMC) del \textit{ring buffer} viene invece impiegata nel contesto del \textit{worker pool} (descritto successivamente).
+Il linguaggio Go fornisce, a tal fine, i \emph{channel} (anche bufferizzati) come tipo primitivo per la comunicazione tra goroutine. Tuttavia, la libreria goccia adotta un approccio differente, basato su \emph{ring buffer lock-free}, con l'obiettivo di massimizzare il throughput. L'implementazione dei \emph{ring buffer} si basa su tre varianti distinte, ciascuna ottimizzata per specifici pattern di accesso concorrente: Single Producer Single Consumer (SPSC), Single Producer Multiple Consumer (SPMC) e Multiple Producer Single Consumer (MPSC). La scelta della variante dipende dal contesto di utilizzo: la versione SPSC viene impiegata per la comunicazione tra stage consecutivi nella pipeline, poiché la relazione è di tipo 1:1. La versione SPMC è utilizzata nel contesto del \emph{worker pool} per operazioni di \emph{fan-out}, dove un singolo produttore distribuisce i \emph{task} a molteplici \emph{consumer}. Simmetricamente, la versione MPSC è impiegata per operazioni di \emph{fan-in}, dove molteplici produttori convergono i risultati verso un singolo \emph{consumer}.
 
-<tabella channel vs ring buffer>
+Per mantenere la libreria estensibile a futuri sviluppi, viene definita l'interfaccia \texttt{Connector}, dotata di tre metodi principali:
 
-Per mantenere la libreria estensibile a futuri sviluppi, viene definita l’interfaccia \texttt{Connector}, dotata di quattro metodi principali:
 \begin{itemize}
-    \item \texttt{Write}: per scrivere un dato nel connettore;
-    \item \texttt{Read}: per leggere il dato disponibile;
-    \item \texttt{Close}: per chiudere il connettore e impedire ulteriori scritture;
+    \item \texttt{Write}: consente di scrivere un dato nel connettore, ritornando \texttt{ErrClosed} qualora il connettore sia stato chiuso.
+    \item \texttt{Read}: legge un dato disponibile dal connettore, accettando un \texttt{context.Context} come parametro per la gestione della cancellazione. Questo design consente di implementare strategie intelligenti di rilascio delle risorse: quando il contesto viene cancellato (ad esempio, a seguito della ricezione di un segnale \texttt{SIGINT} o \texttt{SIGTERM}), il metodo ritorna immediatamente con \texttt{ctx.Err()}, permettendo così una terminazione ordinata della pipeline.
+    \item \texttt{Close}: chiude il connettore, impedendo ulteriori operazioni di scrittura e lettura.
 \end{itemize}
+
+L'implementazione del \emph{ring buffer} nella libreria goccia sfrutta operazioni atomiche per massimizzare le prestazioni in contesti multicore. La struct \texttt{RingBuffer} incapsula tre implementazioni interne distinte (\texttt{spsc}, \texttt{spmc}, \texttt{mpsc}), selezionate in fase di creazione tramite apposito parametro.
+
+Tutte le varianti di \emph{ring buffer} condividono una struttura comune, \texttt{commonBuffer}, che incapsula i campi fondamentali per la gestione del \emph{buffer} circolare. Il campo \texttt{head} rappresenta l'indice della prossima posizione di scrittura nel \emph{buffer}, mentre \texttt{tail} indica l'indice della prossima posizione di lettura. Entrambi i campi sono di tipo \texttt{atomic.Uint64}~\cite{go:sync:atomic:uint64}, garantendo che le operazioni di incremento e lettura siano atomiche e visibili a tutti i \emph{core} della CPU senza necessità di \emph{lock} espliciti. Il campo \texttt{capacity} memorizza la dimensione totale del \emph{buffer}, sempre arrotondata alla potenza di 2 superiore più vicina per consentire l'uso della maschera bit-a-bit \texttt{capMask} (pari a \texttt{capacity - 1}) nel calcolo dell'indice effettivo tramite l'operazione \texttt{index \& capMask}, evitando così la costosa operazione di modulo.
+
+\begin{lstlisting}[language=Go, caption={Definizione campi comuni per l'implementazione di ring buffer (internal/rb/common.go, commonBuffer struct)}]
+type commonBuffer struct {
+	head atomic.Uint64
+
+	_ cpu.CacheLinePad
+
+	tail atomic.Uint64
+
+	_ cpu.CacheLinePad
+
+	capacity uint64
+	capMask  uint64
+
+	_ cpu.CacheLinePad
+}
+\end{lstlisting}
+
+Un aspetto cruciale dell'implementazione è l'uso sistematico del \emph{padding} delle \emph{cache line} tramite il tipo \texttt{cpu.CacheLinePad}~\cite{go:sys:cpu:cachelinepad}. Nelle architetture moderne x86-64, le \emph{cache line} hanno una dimensione tipica di 64 byte. Quando la CPU accede a un dato in memoria, l'intero blocco di 64 byte contenente quel dato viene caricato nella \emph{cache}. In contesti concorrenti, questo può generare un fenomeno critico per le prestazioni noto come \emph{false sharing}.
+
+Il \emph{false sharing} si verifica quando due \emph{thread} accedono a variabili distinte che però risiedono nella stessa \emph{cache line}. Anche se le variabili sono logicamente indipendenti, ogni volta che un \emph{thread} modifica la propria variabile, l'intera \emph{cache line} viene invalidata nelle \emph{cache} degli altri \emph{core}, forzando un \emph{refresh} costoso. Nei \emph{ring buffer} concorrenti, dove \emph{producer} e \emph{consumer} operano rispettivamente su \texttt{head} e \texttt{tail}, questo fenomeno comporterebbe un \emph{overhead} significativo: ogni scrittura su \texttt{head} da parte del \emph{producer} invaliderebbe la \emph{cache line} contenente \texttt{tail} nei \emph{core} dei \emph{consumer}, e viceversa. Separando \texttt{head} e \texttt{tail} tramite \emph{padding}, si elimina la contesa tra \emph{producer} e \emph{consumer} sulle \emph{cache line}, migliorando drasticamente le prestazioni in scenari ad alto throughput~\cite{falsesharing:disruptor}.
+
+Ciascuna variante del \emph{buffer} implementa internamente le operazioni \texttt{push} e \texttt{pop} con semantiche differenti. La versione SPSC utilizza un \emph{buffer} circolare con accesso diretto agli indici, senza necessità di sincronizzazione tra \emph{producer} e \emph{consumer} oltre alle barriere di memoria fornite dalle operazioni atomiche. La versione SPMC/MPSC introduce \emph{slot} con \emph{flag} atomici \texttt{dataReady} per coordinare l'accesso concorrente di molteplici \emph{consumer}, garantendo che ogni dato sia consumato una sola volta tramite l'operazione di \emph{compare-and-swap} sulla \texttt{tail}/\texttt{head}.
+
+\begin{lstlisting}[language=Go, caption={Definizione slot per ring buffer SPMC/MPSC (internal/rb/common.go, slot struct)}]
+type slot[T any] struct {
+	dataReady atomic.Bool
+	data      T
+}
+\end{lstlisting}
+
+Il metodo \texttt{Write} del \emph{ring buffer} implementa una strategia di \emph{backpressure} progressiva. Inizialmente, tenta di inserire il dato tramite un numero limitato di tentativi, cedendo la goroutine tramite \texttt{runtime.Gosched}~\cite{go:runtime:gosched} tra un tentativo e l'altro. Qualora il \emph{buffer} rimanga pieno dopo la fase di \emph{spinning}, il \emph{thread} si blocca su una \emph{condition variable} (\texttt{notFull}) fino a quando non viene segnalato spazio disponibile o il \emph{buffer} viene chiuso. Questo approccio ibrido combina l'efficienza del \emph{busy-waiting} per brevi periodi di contesa con il blocco efficiente per periodi prolungati, riducendo il consumo di CPU in scenari di alta pressione.
+
+Il metodo \texttt{Read} implementa una logica analoga, applicando inizialmente una fase di \emph{spin} per tentare di estrarre un dato, seguita da un blocco su una \emph{condition variable} (\texttt{notEmpty}) qualora il \emph{buffer} rimanga vuoto. La differenza sostanziale rispetto alla versione precedente risiede nella gestione della cancellazione tramite \texttt{context.Context}. Il metodo \texttt{wait} interno coordina l'attesa sulla \emph{condition variable} con il contesto fornito dall'utente.
+
+\begin{lstlisting}[language=Go, caption={Implementazione metodo wait usato dai ring buffer (internal/rb/ring\_buffer.go, metodo wait)}]
+func (rb *RingBuffer[T]) wait(ctx context.Context, cond *sync.Cond) error {
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		cond.Wait()
+	}()
+
+	select {
+	case <-done:
+		return nil
+
+	case <-ctx.Done():
+		// Wake up the waiting goroutine
+		cond.Broadcast()
+		<-done
+		return ctx.Err()
+	}
+}
+\end{lstlisting}
+
+Quando il contesto viene cancellato, la goroutine in attesa viene risvegliata tramite \texttt{Broadcast()} e il metodo ritorna l'errore di cancellazione. Questo meccanismo garantisce che le operazioni di lettura e scrittura possano essere interrotte in modo controllato, prevenendo \emph{deadlock} o attese indefinite durante lo \emph{shutdown} della pipeline.
