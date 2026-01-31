@@ -1,0 +1,11 @@
+\section[Processor Stage]{Processor Stage}
+
+Un \textit{Processor stage} rappresenta un'unità di elaborazione intermedia all'interno della \textit{pipeline} di \textbf{goccia}. Diversamente dagli \textit{Ingress stage}, che fungono da punto di ingresso, i \textit{Processor stage} ricevono messaggi da uno \textit{stage} precedente tramite un \textit{connector} di input, li trasformano secondo una logica specifica, e inoltrano il risultato verso lo \textit{stage} successivo tramite un \textit{connector} di output. In altri termini, ogni \textit{Processor stage} implementa una funzione di trasformazione pura: $f(\text{messaggio\_in}) \to \text{messaggio\_out}$, consentendo di costruire \textit{pipeline} complesse attraverso la composizione di trasformazioni modulari. Nel contesto della libreria \textbf{goccia}, i \textit{Processor stage} sono progettati per essere altamente flessibili e riusabili, mantenendo una chiara separazione tra l'infrastruttura di orchestrazione e la logica di elaborazione specifica.
+
+\input{content/chapters/library_architecture/processor_stage/cannelloni.tex}
+\input{content/chapters/library_architecture/processor_stage/can.tex}
+\input{content/chapters/library_architecture/processor_stage/csv.tex}
+\input{content/chapters/library_architecture/processor_stage/custom.tex}
+\input{content/chapters/library_architecture/processor_stage/filter.tex}
+\input{content/chapters/library_architecture/processor_stage/tee.tex}
+\input{content/chapters/library_architecture/processor_stage/rob.tex}

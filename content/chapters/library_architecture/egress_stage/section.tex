@@ -1,0 +1,10 @@
+\section[Egress Stage]{Egress Stage}
+
+Un Egress stage rappresenta il punto terminale della pipeline di goccia, responsabile dell'esportazione dei messaggi elaborati verso destinazioni esterne al sistema. Diversamente dai Processor stage, che trasformano messaggi e li inoltrano a stage successivi, gli Egress stage ricevono messaggi da uno stage precedente tramite un connector di input e li materializzano verso sink esterni quali database, broker di messaggistica, file system o socket di rete. In altri termini, ogni Egress stage implementa una funzione di output: \(f(\text{messaggio\_in}) \rightarrow \text{void}\), terminando così il flusso di elaborazione e rendendo i dati disponibili per sistemi downstream o per la persistenza.
+
+\input{content/chapters/library_architecture/egress_stage/udp.tex}
+\input{content/chapters/library_architecture/egress_stage/tcp.tex}
+\input{content/chapters/library_architecture/egress_stage/kafka.tex}
+\input{content/chapters/library_architecture/egress_stage/file.tex}
+\input{content/chapters/library_architecture/egress_stage/quest_db.tex}
+\input{content/chapters/library_architecture/egress_stage/sink.tex}

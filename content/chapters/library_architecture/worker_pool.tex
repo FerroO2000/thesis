@@ -1,0 +1,29 @@
+\section{Worker Pool}
+
+Il Worker Pool rappresenta un pattern architetturale fondamentale per la gestione efficiente del parallelismo controllato all'interno della libreria goccia. Diversamente dall'approccio diretto di generare una goroutine per ogni task in arrivo, il Worker Pool mantiene un numero limitato di goroutine riutilizzabili che elaborano task provenienti da una coda condivisa. Questa strategia consente di evitare la saturazione delle risorse di sistema causata dalla creazione eccessiva di unità di lavoro concorrenti, riducendo al contempo l'overhead del context switching e della gestione della memoria.
+
+Il Worker Pool della libreria goccia costituisce il nucleo esecutivo condiviso sia dai Processor Stage che dagli Egress Stage, garantendo scalabilità dinamica e throughput elevato tramite meccanismi di fan-out, fan-in e autoscaling adattivo.
+
+L'architettura del Worker Pool si articola in quattro componenti principali: il Fan-Out, il Fan-In, lo Scaler e i Worker stessi. Il Fan-Out rappresenta il meccanismo di distribuzione dei task dai produttori verso i worker. Concretamente, esso incapsula un ring buffer lock-free di tipo Single Producer Multiple Consumer (SPMC). Questo buffer consente a un singolo stage a monte di inserire messaggi al suo interno, i quali vengono poi estratti in modalità concorrente da molteplici worker.
+
+Il Fan-In realizza la funzione duale di aggregazione: raccoglie i risultati prodotti da molteplici worker e li ricompone sequenzialmente in un unico flusso di output. Esso utilizza un ring buffer lock-free di tipo Multiple Producer Single Consumer (MPSC). In questo caso, i worker scrivono i messaggi elaborati, mentre una singola goroutine a valle legge dal buffer, garantendo così l'ordinamento e la serializzazione dei risultati prima del trasferimento allo stage successivo.
+
+Lo Scaler rappresenta il componente responsabile dell'adattamento dinamico del numero di worker in esecuzione, in funzione del carico corrente. Esso monitora periodicamente la profondità della coda di ingresso (fan-out) e confronta tale valore con soglie configurabili per determinare se incrementare o ridurre il numero di worker attivi.
+
+Infine, i Worker sono le unità di elaborazione effettive che estraggono task dalla coda di fan-out, invocano la logica specifica di uno stage, e depositano i risultati nella coda di fan-in.
+
+<disegno fan-in/out scaler worker>
+
+Lo Scaler implementa un algoritmo di autoscaling adattivo che regola dinamicamente il numero di worker attivi in funzione della profondità della coda di ingresso. La logica di scaling è incapsulata nella struct \texttt{Scaler}, definita nel package \texttt{internal/pool/scaler}. Il parametro critico è \texttt{QueueDepthPerWorker} (default 64), che rappresenta il numero target di task in coda per ciascun worker. Se il rapporto tra il numero di task pendenti e il numero di worker correnti supera questa soglia, lo scaler decide di incrementare il numero di worker.
+
+La decisione di scaling è presa periodicamente, con un intervallo configurabile tramite \texttt{AutoScaleInterval} (default 3 secondi). Durante ogni ciclo di valutazione, lo scaler calcola il numero ottimale di worker tramite la formula. Il numero di worker è vincolato dai limiti \texttt{MinWorkers} (default 1) e \texttt{MaxWorkers} (default \texttt{runtime.NumCPU}).
+
+Per quanto riguarda la riduzione del numero di worker (scale-down), lo scaler implementa un meccanismo di exponential backoff. Quando viene rilevata la necessità di ridurre il numero di worker, il parametro \texttt{ScaleDownFactor} (default 0.1) determina la frazione di worker da rimuovere, mentre il parametro \texttt{ScaleDownBackoff} (default 1.5) controlla il fattore di incremento esponenziale del tempo di attesa tra riduzioni consecutive. Questo meccanismo previene oscillazioni eccessive del numero di worker in presenza di carichi fluttuanti, garantendo stabilità operativa.
+
+Lo Scaler notifica il Worker Pool tramite due canali, uno per segnalare la necessità di creare e far partire un nuovo Worker, e l'altro per terminarlo.
+
+Il Worker Pool espone molteplici metriche per monitorare lo stato operativo e identificare eventuali colli di bottiglia. Le metriche principali includono il numero di task pendenti nella coda di fan-out e il numero di worker attivi.
+
+Il Worker Pool è utilizzato sia dai Processor Stage che dagli Egress Stage quando configurati in modalità Worker Pool (\texttt{runningMode=StageRunningModePool}). Nel caso dei Processor Stage, il Worker Pool gestisce l'elaborazione concorrente di messaggi provenienti da uno stage a monte, applicando trasformazioni definite dall'utente e inoltrando i risultati allo stage successivo tramite il connector di output. Per gli Egress Stage, il Worker Pool coordina l'invio parallelo di messaggi verso destinazioni esterne quali database, broker di messaggistica, o socket di rete.
+
+La decisione di utilizzare il Worker Pool o un singolo worker (Single Worker Mode) è determinata dalla configurazione dello stage. La modalità pool è particolarmente vantaggiosa in scenari ad alto throughput, dove l'elaborazione di ciascun messaggio è computazionalmente costosa e il parallelismo può sfruttare efficacemente le risorse multi-core disponibili.
