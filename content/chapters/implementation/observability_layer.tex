@@ -1,0 +1,24 @@
+\section{Observability Layer}
+\label{sec:observability-layer}
+
+Il \textit{Livello di osservabilità} raccoglie e struttura i segnali relativi al comportamento del sistema (metriche e trace), indipendentemente da come verranno successivamente visualizzati. In questa architettura è realizzato da tre componenti principali: \texttt{OpenTelemetry Collector}~\cite{otel:collector}, \texttt{Prometheus}~\cite{prometheus:official}, \texttt{Tempo}~\cite{grafana:tempo} e \texttt{Grafana}.
+
+\subsubsection{OpenTelemetry Collector}
+
+Questo è il componente general-purpose per la ricezione, il processamento e l’esportazione di segnali di osservabilità provenienti da più sorgenti.
+
+Nel sistema di telemetria di SquadraCorse, il Collector riceve tramite protocollo OTLP/gRPC i trace e le metriche prodotti dalle istanze di \texttt{sc-telemetry}, strumentate tramite Goccia; su questi dati applica quindi una catena di \textit{processor} (ad esempio un \texttt{batch} per raggruppare gli eventi, un \texttt{memory\_limiter} per controllare il consumo di memoria ed eventualmente processor di \textit{sampling} per ridurre il volume dei trace) e, infine, esporta le metriche verso Prometheus ed i trace verso Grafana Tempo.
+
+\subsubsection{Prometheus}
+
+Prometheus viene utilizzato come database di serie temporali per le metriche del sistema di telemetria. Raccoglie principalmente le metriche esposte dall’OpenTelemetry Collector, che fornisce una vista aggregata sul comportamento dei vari servizi, con la possibilità di integrare in modo incrementale ulteriori sorgenti (ad esempio metriche esposte direttamente da altri componenti).
+
+Adotta un modello dati dimensionale, in cui ogni serie temporale è identificata da un nome di metrica e da un insieme di label; ciò consente di distinguere, ad esempio, le metriche per servizio, istanza o stage della pipeline e di formulare query che filtrano o aggregano i dati (throughput per stage, latenza p99, numero di errori, ecc.) con grande flessibilità.
+
+\subsubsection{Grafana Tempo}
+
+Per il \textit{distributed tracing} viene impiegato \texttt{Grafana Tempo}, un backend progettato per memorizzare e interrogare trace di applicazioni distribuite a partire da segnali OpenTelemetry, Jaeger o Zipkin.
+
+Nel sistema proposto, Tempo riceve i trace esportati dall’OpenTelemetry Collector. Ogni messaggio di telemetria elaborato da \texttt{sc-telemetry} genera una root span associata alla ricezione del datagramma UDP, mentre ciascuno degli stage della pipeline Goccia (UDP ingress, decoder Cannelloni, ROB, decoder CAN, handler, egress QuestDB) contribuisce con uno span figlio. Ciò permette di ricostruire il percorso completo di elaborazione di un messaggio end-to-end, misurare la latenza introdotta da ciascun stage e individuare colli di bottiglia o anomalie.
+
+Grafana Tempo è particolarmente adatto a questo scenario perché evita l’uso di database di ricerca generici (come Elasticsearch) e utilizza storage ottimizzati per trace compressi, riducendo i costi operativi e mantenendo al contempo capacità di interrogazione avanzate tramite TraceQL. Inoltre, esso è nativamente integrato in Grafana, semplificando la configurazione di quest’ultimo.

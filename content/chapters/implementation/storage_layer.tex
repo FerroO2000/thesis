@@ -1,0 +1,41 @@
+\section{Storage Layer}
+\label{sec:storage-layer}
+
+Il \textit{Livello di persistenza} ha il compito di memorizzare in modo durevole e strutturato i dati di telemetria prodotti dalle pipeline, rendendoli disponibili sia per la visualizzazione quasi real--time sia per analisi differite.
+
+\subsubsection{QuestDB}
+
+QuestDB è stato scelto come backend di persistenza poiché è un database time-series open source progettato specificamente per carichi ad alto throughput su dati indicizzati temporalmente. A differenza dei database relazionali tradizionali, adotta uno storage column-oriented e un modello dati nativamente temporale: il timestamp è un tipo primitivo e può fungere da chiave di partizionamento, consentendo l’organizzazione fisica delle tabelle per intervalli temporali (ad esempio per giorno). Questo approccio, combinato con tecniche di compressione e partizionamento, permette di gestire l’ingestion di milioni di record al secondo e query analitiche su grandi volumi di dati mantenendo latenze contenute.
+
+L’interfaccia di accesso si basa su SQL esteso con primitive specifiche per le serie temporali, come \texttt{SAMPLE BY} per il downsampling, \texttt{LATEST ON} per il recupero dello stato più recente, che risultano particolarmente adatti alle analisi di dati telemetrici. Inoltre, il supporto ai protocolli standard come PGwire (compatibile PostgreSQL) e alle API HTTP/REST facilita l’integrazione con strumenti esterni e con la piattaforma Grafana. Nel contesto di questa architettura, QuestDB agisce come single source of truth per i dati di telemetria, mentre i dati di osservabilità relativi al funzionamento del sistema (metriche e trace) sono affidati ai backend specializzati Prometheus e Tempo.
+
+\subsubsection{Data Model}
+
+Nel modello dati adottato per QuestDB, i segnali CAN decodificati vengono suddivisi in più tabelle in base al \textit{tipo di valore} associato al segnale. In particolare, esistono quattro tabelle principali: \texttt{flag\_signals} per i segnali booleani, \texttt{int\_signals} per i segnali interi, \texttt{float\_signals} per i segnali in virgola mobile ed \texttt{enum\_signals} per i segnali enumerativi. Questa scelta consente di mantenere omogenee le colonne di ciascuna tabella e di semplificare sia l’ingestione sia le query analitiche successive.
+
+Tutte le tabelle condividono un insieme di colonne comuni: un campo simbolico \texttt{name}, che identifica il segnale (ad esempio \texttt{motor\_rpm} o \texttt{coolant\_temp}), il campo intero \texttt{can\_id}, che memorizza l’ID del frame CAN da cui il segnale è stato estratto, e il campo intero \texttt{raw\_value}, che conserva il valore grezzo così come presente nel payload del frame. A queste colonne comuni si affiancano poi colonne specifiche per ciascun tipo: nella tabella \texttt{flag\_signals} è presente la colonna booleana \texttt{flag\_value}; in \texttt{int\_signals} la colonna intera \texttt{integer\_value}; in \texttt{float\_signals} la colonna a virgola mobile \texttt{float\_value}. Per i segnali enumerativi, memorizzati in \texttt{enum\_signals}, oltre a \texttt{can\_id} e \texttt{raw\_value} viene utilizzato anche un simbolo \texttt{enum\_value}, che rappresenta la label dell’enumerazione corrispondente al valore numerico sottostante.
+
+\begin{lstlisting}[language=SQL, caption={Definizione tabella dei segnali in QuestDB}]
+CREATE TABLE float_signals (
+  timestamp TIMESTAMP,
+  name SYMBOL,
+  can_id LONG,
+  raw_value LONG,
+  /*
+  integer_value LONG for int_signals table
+  flag_value BOOLEAN for flag_signals table
+  enum_value SYMBOL for enum_signals table
+  */
+  float_value DOUBLE
+) TIMESTAMP(timestamp) PARTITION BY DAY;
+\end{lstlisting}
+
+In questo modo, l’organizzazione dei dati in QuestDB risulta sia normalizzata rispetto al tipo del segnale, sia sufficientemente ricca da consentire analisi flessibili: le colonne \texttt{name} ed eventuali simboli aggiuntivi (\texttt{enum\_value}) permettono di filtrare e aggregare per segnali logici di alto livello, mentre \texttt{can\_id} e \texttt{raw\_value} preservano il legame con la rappresentazione originaria sul bus CAN.
+
+\subsubsection{Throughput, partizionamento e retention}
+
+Dal punto di vista prestazionale, QuestDB è dimensionato per gestire senza difficoltà il volume di dati generato dai due bus CAN del prototipo SquadraCorse. La documentazione ufficiale e benchmark indipendenti riportano capacità di ingest nell’ordine dei milioni di record al secondo su hardware moderno, valori ben superiori al carico previsto in questa applicazione.\cite{questdb:architecture}\cite{questdb:benchmark}\cite{griddb:benchmark}
+
+La strategia di partizionamento temporale adottata (tipicamente per giorno) consente di implementare in modo semplice politiche di retention basate su orizzonti temporali, eliminando intere partizioni in un’unica operazione, e al tempo stesso riduce la quantità di dati che devono essere scansionati dalle query, che nella pratica si concentrano spesso su singole sessioni di test o giornate di prove. Ne risulta una migliore località dei dati su disco, con effetti positivi sulle latenze di interrogazione.
+
+Infine, la presenza di QuestDB come layer esclusivamente \textit{di storage} per i dati di telemetria -- separato dallo storage di metriche (Prometheus) e trace (Tempo) -- rende l’architettura più modulare: è possibile, ad esempio, estendere in futuro il sistema con ulteriori database (per analisi offline o machine learning) senza impattare sul percorso critico di acquisizione ed elaborazione dei segnali provenienti dalla vettura.

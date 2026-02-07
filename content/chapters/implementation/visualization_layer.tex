@@ -1,0 +1,37 @@
+\section{Visualization Layer}
+\label{sec:visualization-layer}
+
+Il \textit{Livello di visualizzazione} ha il compito di rendere disponibili, in modo sicuro e fruibile, i dati di telemetria e i segnali di osservabilità agli utenti umani (ingegneri di pista, sviluppatori, data analyst). In questa architettura è realizzato principalmente da \texttt{Grafana}~\cite{grafana:official}, come interfaccia di consultazione unificata, e da \texttt{Caddy}~\cite{caddy:docs}, come reverse proxy e terminazione TLS verso l’esterno.
+
+\subsubsection{Grafana}
+
+Grafana costituisce il frontend di riferimento per la visualizzazione dei dati prodotti dagli altri layer del sistema. Tramite opportuni data source, interroga QuestDB per accedere ai segnali CAN decodificati e memorizzati nel Livello di persistenza, Prometheus per le metriche di sistema (throughput, latenze, errori, stato dei servizi) e Grafana Tempo per l’esplorazione dei trace distribuiti. Le dashboard realizzate a supporto dell’attività di SquadraCorse combinano questi sorgenti informativi per offrire, in un’unica interfaccia, una vista completa sia dello stato della vettura sia del comportamento del sistema di telemetria.
+
+La definizione delle dashboard non avviene manualmente tramite l’interfaccia grafica, ma segue un approccio \textit{infrastructure as code}: le configurazioni sono descritte in Jsonnet~\cite{jsonnet:official} utilizzando la libreria Grafonnet~\cite{grafonnet:github}, che fornisce primitive ad alto livello per la costruzione di pannelli, row e datasource. I file Jsonnet vengono quindi compilati in manifest JSON standard di Grafana e inclusi nel processo di provisioning, così da poter versionare non solo il codice applicativo, ma anche la struttura e il contenuto dei dashboard. Questo approccio semplifica la manutenzione e l’evoluzione delle viste, consente di riutilizzare componenti comuni tra dashboard diversi e garantisce la riproducibilità dell’ambiente di visualizzazione su installazioni differenti.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.7\textwidth]{images/implementation/grafana_pressure.JPG}
+  \caption{Dashboard Grafana tratte dal sistema di telemetria di SquadraCorse (pressioni)}
+  \label{fig:grafana-pressure}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.7\textwidth]{images/implementation/grafana_cells.JPG}
+  \caption{Dashboard Grafana tratte dal sistema di telemetria di SquadraCorse (tensioni/temperature)}
+  \label{fig:grafana-cells}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.7\textwidth]{images/implementation/grafana_fsm.JPG}
+  \caption{Dashboard Grafana tratte dal sistema di telemetria di SquadraCorse (FSM)}
+  \label{fig:grafana-fsm}
+\end{figure}
+
+\subsubsection{Caddy}
+
+Il container Caddy funge da reverse proxy e da punto di terminazione TLS per i servizi web esposti dal sistema, in primo luogo Grafana. In ascolto sulla porta 443/TCP, Caddy si occupa di gestire automaticamente i certificati HTTPS (ad esempio tramite Let’s Encrypt), riducendo in modo significativo la complessità operativa legata alla sicurezza del trasporto, e di instradare le richieste in ingresso verso l’istanza di Grafana esposta sulla rete interna.
+
+Questa separazione tra la responsabilità di visualizzazione, demandata a Grafana, e quella di pubblicazione sicura verso l’esterno, affidata a Caddy, permette di mantenere tutti i componenti interni --- inclusi Prometheus, Tempo e QuestDB --- confinati in reti Docker private, esponendo all’esterno un unico endpoint HTTPS gestito e controllato. In tal modo, il Livello di visualizzazione rimane facilmente accessibile ai membri del team senza introdurre superfici di attacco aggiuntive o accoppiamenti stretti con la topologia interna del sistema di telemetria.

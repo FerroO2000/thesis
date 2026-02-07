@@ -1,0 +1,33 @@
+\chapter{Implementazione del sistema di telemetria automobilistica di SquadraCorse}
+\label{sec:implementation}
+
+Il sistema di telemetria in tempo reale per il prototipo di Formula SAE di SquadraCorse Polito è stato progettato secondo un’architettura a più livelli che separa chiaramente le responsabilità tra acquisizione, elaborazione, persistenza, osservabilità e visualizzazione dei dati.
+
+L’autovettura, collegata a Internet tramite un gateway 5G, espone due linee CAN (Controller Area Network); i messaggi trasmessi sui due bus vengono incapsulati secondo il protocollo Cannelloni, poi in datagrammi UDP, e inviati tramite una VPN Tailscale verso un server centrale su cui è eseguito un insieme di servizi orchestrati tramite Docker.
+
+Dal punto di vista logico, l’architettura è suddivisa in cinque layer principali:
+
+\begin{description}
+  \item[\textbf{Livello di acquisizione dati (\textit{Ingestion Layer})}]%
+  Responsabile della ricezione sicura dei datagrammi UDP provenienti dall’auto e del loro instradamento verso i servizi interni.
+
+  \item[\textbf{Livello di elaborazione (\textit{Processing Layer})}]%
+  Implementato tramite la libreria Goccia, si occupa di decodificare i frame Cannelloni, interpretare i messaggi CAN e trasformarli in segnali ad alto livello.
+
+  \item[\textbf{Livello di persistenza (\textit{Storage Layer})}]%
+  Gestisce la memorizzazione dei dati di telemetria in un database time-series ad alte prestazioni.
+
+  \item[\textbf{Livello di osservabilità (\textit{Observability Layer})}]%
+  Raccoglie, struttura e correla metriche e trace relativi al comportamento dell’intero sistema di telemetria, fornendo una base unificata per il monitoraggio tecnico.
+
+  \item[\textbf{Livello di visualizzazione (\textit{Visualization Layer})}]%
+  Espone in modo sicuro agli utenti (tramite dashboard e interfacce web) sia i dati di telemetria persistiti sia i segnali di osservabilità, fungendo da punto di accesso unificato per l’analisi in tempo reale e post.
+\end{description}
+
+<disegno architettura generale>
+
+\include{content/chapters/implementation/ingestion_layer}
+\include{content/chapters/implementation/processing_layer}
+\include{content/chapters/implementation/storage_layer}
+\include{content/chapters/implementation/observability_layer}
+\include{content/chapters/implementation/visualization_layer}

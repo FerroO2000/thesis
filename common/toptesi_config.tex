@@ -115,3 +115,42 @@
   captionpos=b,
   escapeinside={\%*}{*)}
 }
+
+\lstdefinelanguage{SQL}{
+  morekeywords={SELECT, FROM, WHERE, GROUP, BY, ORDER, ASC, DESC, HAVING, 
+    JOIN, INNER, LEFT, RIGHT, FULL, ON, AND, OR, NOT, IS, NULL, LIKE, IN, 
+    BETWEEN, EXISTS, ANY, ALL, DISTINCT, UNION, INTERSECT, EXCEPT, 
+    INSERT, INTO, VALUES, UPDATE, SET, DELETE, CREATE, TABLE, INDEX, 
+    VIEW, TRIGGER, AS, CASE, WHEN, THEN, ELSE, END, CAST, CONVERT, 
+    COUNT, SUM, AVG, MIN, MAX, LIMIT, OFFSET, TOP, FETCH, FIRST, NEXT, 
+    TIMESTAMP, DATE, TIME, INTERVAL, YEAR, MONTH, DAY, HOUR, MINUTE, SECOND,
+    SAMPLE, BY, LATEST, ON, ASOF, PARTITION, DAY, TIMESTAMP},
+  sensitive=false,
+  morecomment=[l]{--},
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]',
+  morestring=[b]",
+  morestring=[b]`,
+}
+
+\definecolor{sqlkeyword}{RGB}{0, 55, 255}
+
+\lstset{
+  language=SQL,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{sqlkeyword}\bfseries,
+  commentstyle=\color{gray}\itshape,
+  stringstyle=\color{red},
+  breaklines=true,
+  breakatwhitespace=true,
+  tabsize=2,
+  showstringspaces=false,
+  frame=tb,
+  rulecolor=\color{black},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  numbersep=9pt,
+  captionpos=b,
+  escapeinside={\%*}{*)}
+}

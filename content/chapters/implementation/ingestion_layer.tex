@@ -1,0 +1,24 @@
+\section{Ingestion Layer}
+\label{sec:ingestion-layer}
+
+Il \textit{Livello di acquisizione dati} comprende tutti i componenti responsabili di ricevere i messaggi provenienti dall’auto, tramite la rete 5G e la VPN Tailscale, e di recapitarli ai container di telemetria basati su Goccia.
+
+\subsubsection{Connettività Tailscale}
+
+Il container \texttt{tailscale} stabilisce una rete privata virtuale basata su WireGuard fra il gateway 5G a bordo vettura e il server di telemetria. Una volta stabilita la VPN, i datagrammi UDP generati dal gateway vengono incapsulati nel tunnel Tailscale e consegnati all’istanza \texttt{tailscale} in esecuzione sul server, la quale li rende disponibili agli altri servizi Docker.
+
+Il reale mittente dei pacchetti è una PCB custom sviluppata internamente al team \cite{scanner:github} che si occupa dell’effettiva lettura dei due bus CAN ed effettua l’incapsulamento secondo il protocollo Cannelloni. Questa scheda è programmata, lato firmware, per inviare i datagrammi UDP verso un unico indirizzo IP, ma su due porte diverse, una per ciascuna linea CAN.
+
+Per poter trasmettere i dati fino al server in sicurezza, il gateway (basato su OpenWRT) configura innanzitutto un alias sull’interfaccia LAN (\texttt{br-lan}), in modo da \textit{simulare un host} con indirizzo IP corrispondente alla destinazione attesa dalla PCB. L’alias viene creato come interfaccia \texttt{lan\_alias} di tipo statico, associata a \texttt{br-lan} e configurata con l’indirizzo, ad esempio, \texttt{192.168.10.254/32}.
+
+Successivamente, il gateway abilita l’inoltro IPv4 e definisce delle regole di \textit{DNAT} nella tabella di \texttt{PREROUTING} che riscrive la destinazione di tutto il traffico proveniente da \texttt{br-lan} e indirizzato a \texttt{192.168.10.254} verso l’indirizzo IP del container Tailscale del server.
+
+In questo modo, la PCB continua a inviare i pacchetti verso un indirizzo IP locale fisso (l’alias sulla LAN), mentre il gateway, in maniera trasparente, li inoltra attraverso la VPN Tailscale verso il server di telemetria. Il firmware della scheda resta così indipendente dai dettagli di configurazione della VPN e dell’infrastruttura remota.
+
+\subsubsection{Instradamento dei datagram}
+
+Il servizio \texttt{udp-proxy} è il punto di demarcazione tra la VPN e il resto dello stack di telemetria. Esso condivide il medesimo namespace di rete del container Tailscale (tramite \texttt{network\_mode: service:tailscale}) e riceve quindi direttamente i datagrammi UDP provenienti dalla vettura.
+
+La sua funzione è quella di \textit{instradare} i pacchetti UDP verso i corretti consumer a valle, in base alla porta di destinazione. Per ciascuna porta di ascolto configurata viene creata un’istanza del proxy, che apre una socket UDP in ascolto e apre una connessione verso l’endpoint che si occuperà del processamento.
+
+Il cuore del componente è implementato utilizzando il server UDP offerto dalla libreria standard di Go.
