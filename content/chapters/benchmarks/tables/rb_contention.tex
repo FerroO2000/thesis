@@ -1,0 +1,18 @@
+\begin{table}[h]
+\centering
+\begin{tabular}{lllrrr}
+\hline
+\textbf{Architettura} & \textbf{Pattern} & \textbf{Config.} & \textbf{Baseline (ns)} & \textbf{RB (ns)} & \textbf{Speedup} \\ \hline
+\multirow{3}{*}{\textbf{AMD EPYC}} & SPSC & P1-C1 & 118.20 & 44.41 & \textbf{2.66x} \\
+ & SPMC & P1-C16 & 149.40 & 63.66 & \textbf{2.35x} \\
+ & MPSC & P16-C1 & 146.40 & 62.91 & \textbf{2.33x} \\ \hline
+\multirow{3}{*}{\textbf{Intel i7}} & SPSC & P1-C1 & 193.60 & 71.47 & \textbf{2.71x} \\
+ & SPMC & P1-C16 & 275.50 & 91.70 & \textbf{3.00x} \\
+ & MPSC & P16-C1 & 274.40 & 106.50 & \textbf{2.58x} \\ \hline
+\multirow{3}{*}{\textbf{Apple M1}} & SPSC & P1-C1 & 99.07 & 62.72 & \textbf{1.58x} \\
+ & SPMC & P1-C16 & 92.41 & 64.89 & \textbf{1.42x} \\
+ & MPSC & P16-C1 & 207.50 & 76.62 & \textbf{2.71x} \\ \hline
+\end{tabular}
+\caption{Confronto latenza e speedup in scenario di contesa}
+\label{tab:contention}
+\end{table}

@@ -1,0 +1,88 @@
+\section{Micro-benchmarking: Analisi dei Connettori Interni}
+\label{sec:micro-benchmark}
+
+L'architettura della libreria \texttt{goccia} fonda la propria efficienza sulla minimizzazione della latenza nel trasferimento dei messaggi tra gli stadi della pipeline. Poiché il tempo di elaborazione della logica di business all'interno di uno stage ($T_{process}$) è indipendente dall'infrastruttura di trasporto, l'ottimizzazione delle prestazioni complessive dipende strettamente dalla riduzione del tempo di attraversamento del connettore ($T_{transfer}$). In questa sezione viene presentata un'analisi quantitativa volta a dimostrare il vantaggio prestazionale dei \textit{ring buffer} lock-free implementati rispetto alle primitive native del linguaggio Go (channel), a parità di semantica di comunicazione.
+
+\subsection{Metodologia e setup sperimentale}
+
+Il benchmark è stato progettato per isolare il costo computazionale delle operazioni di scrittura (\texttt{Write}) e lettura (\texttt{Read}) nel connettore, escludendo qualsiasi logica di elaborazione del payload per evitare rumore nelle misurazioni. Il confronto avviene tra due implementazioni:
+
+\begin{itemize}
+    \item \textbf{Baseline:} Un wrapper attorno a un \texttt{chan int} bufferizzato standard del linguaggio Go, che utilizza mutex interni gestiti dal runtime per la sincronizzazione delle goroutine.
+    \item \textbf{RingBuffer:} L'implementazione della libreria Goccia ottimizzata nelle varianti \textbf{SPSC} (\textit{Single Producer Single Consumer}), \textbf{SPMC} (\textit{Single Producer Multiple Consumer}) e \textbf{MPSC} (\textit{Multiple Producer Single Consumer}), caratterizzata dall'uso di operazioni atomiche e padding delle cache-line per evitare il \textit{false sharing}.
+\end{itemize}
+
+Qui sotto viene riportata l'implementazione della Baseline:
+
+\begin{lstlisting}[language=Go, caption={Implementazione della Baseline basata su canali}, label={lst:baseline_rb}]
+type baselineRingBuffer struct {
+    ch chan int
+}
+
+func (b *baselineRingBuffer) Write(val int) error {
+    b.ch <- val
+    return nil
+}
+
+func (b *baselineRingBuffer) Read(ctx context.Context) (int, error) {
+    select {
+    case <-ctx.Done():
+        return 0, ctx.Err()
+    case val := <-b.ch:
+        return val, nil
+    }
+}
+\end{lstlisting}
+
+I test sono stati eseguiti su tre ambienti hardware distinti per valutare la consistenza dei risultati su diverse microarchitetture e set di istruzioni:
+\begin{itemize}
+    \item \textbf{Server CI:} AMD EPYC 7763 64-Core (x86\_64).
+    \item \textbf{Workstation:} Intel Core i7-6700 @ 3.40GHz (x86\_64).
+    \item \textbf{Laptop:} Apple M1 (ARM64).
+\end{itemize}
+
+La valutazione si articola in due scenari di carico:
+\begin{itemize}
+    \item \textbf{Steady State:} Misura il throughput in condizioni di regime, dove le operazioni di scrittura e lettura avvengono in un ciclo continuo bilanciato senza interruzioni forzate.
+    \item \textbf{Contention:} Valuta il comportamento sotto stress concorrente, variando il numero di produttori o consumatori (da 1 a 16 goroutine) per sollecitare i meccanismi di sincronizzazione e lo scheduler del sistema operativo.
+\end{itemize}
+
+Il codice sorgente completo è disponibile nel repository del progetto sotto il package \texttt{internal/rb} \cite{goccia:rb:benchmark}. Per replicare i benchmark e verificare i risultati presentati, è possibile utilizzare il toolchain standard del Go lanciando il seguente comando dalla directory di root del progetto:
+
+\begin{lstlisting}[language=Bash, caption={Comando per l'esecuzione dei benchmark}]
+go test -bench=. -benchmem ./internal/rb
+\end{lstlisting}
+
+\subsection{Analisi in regime stazionario}
+
+I risultati ottenuti nello scenario \textit{Steady State} dimostrano una netta superiorità dei ring buffer rispetto ai canali Go in tutte le configurazioni hardware testate. La tabella sottostante riassume i tempi di latenza media per operazione (ns/op) e il relativo \textit{speedup} ottenuto.
+
+\input{content/chapters/benchmarks/tables/rb_steady}
+
+L'analisi dei dati evidenzia che l'implementazione custom riduce drasticamente l'overhead di sincronizzazione. Il guadagno è particolarmente marcato su architettura server (AMD EPYC), dove lo speedup raggiunge il fattore \textbf{4.75x}. Ciò è attribuibile alla gestione ottimizzata della coerenza della cache nei ring buffer: in sistemi \textit{multi-core}, il costo dei lock dei canali standard aumenta significativamente, mentre le operazioni atomiche \textit{lock-free} scalano con maggiore efficienza. Su architettura ARM64 (Apple M1), pur mantenendo un vantaggio netto ($\sim$1.5x), il divario si riduce, suggerendo un'implementazione dei canali nativi particolarmente ottimizzata per il modello di memoria rilassato di ARM o un costo relativo delle primitive di sincronizzazione inferiore.
+
+\subsection{Scalabilità in scenari di contesa}
+
+Mentre i test a regime stazionario dimostrano l'efficienza di base del \textit{data-path}, è nello scenario di \textit{Contention} che si verifica la robustezza dell'architettura in condizioni critiche. In un sistema reale come la contesa si manifesta in due pattern principali: \textbf{Fan-Out} (SPMC), dove un singolo stadio distribuisce pacchetti a un pool di worker, e \textbf{Fan-In} (MPSC), dove molteplici sorgenti convergono verso un unico buffer.
+
+Per valutare il comportamento limite, sono stati confrontati i ring buffer contro i canali Go configurando il massimo livello di parallelismo testato (fino a 16 goroutine concorrenti). La tabella seguente riporta i risultati per le configurazioni più significative.
+
+\input{content/chapters/benchmarks/tables/rb_contention}
+
+L'analisi dei dati di contesa evidenzia tre dinamiche fondamentali:
+\begin{enumerate}
+    \item \textbf{Resilienza al "Thundering Herd":} Nello scenario \textbf{SPMC} (Fan-Out) su architettura Intel i7, si osserva lo speedup più elevato in assoluto (\textbf{3.00x}). I canali Go, basati su mutex, soffrono il risveglio simultaneo di molti consumatori per un singolo dato. Il ring buffer SPMC, utilizzando operazioni atomiche \textbf{CAS} (\textit{Compare-And-Swap}), risolve la contesa a livello hardware senza richiedere un intervento oneroso dello scheduler del sistema operativo.
+    \item \textbf{Superiorità nel Fan-In su ARM64:} Un risultato notevole emerge dall'architettura \textbf{Apple M1} nello scenario \textbf{MPSC}, dove lo speedup tocca il \textbf{2.71x}. In questo contesto, il meccanismo di locking dei canali Go introduce un overhead non lineare, mentre l'approccio ottimistico dei ring buffer scala efficacemente sfruttando l'architettura \textit{load/store} dei processori Apple Silicon.
+    \item \textbf{Stabilità della Latenza:} Confrontando la Baseline a bassa contesa (P1-C1) con quella ad alta contesa (P1-C16), si nota come i canali Go tendano a degradare le prestazioni. Sebbene anche i ring buffer subiscano un incremento di latenza, il valore assoluto rimane in un ordine di grandezza (< 100 ns) tale da garantire un throughput sostenuto superiore ai 10 milioni di messaggi al secondo, ampiamente sufficiente per i requisiti automotive.
+\end{enumerate}
+
+\subsection{Discussione architetturale}
+
+La superiorità prestazionale dei ring buffer di \texttt{goccia} rispetto ai canali Go valida le scelte progettuali descritte nel Capitolo 4. Due fattori tecnici principali giustificano questi risultati:
+
+\begin{itemize}
+    \item \textbf{Assenza di Lock (Lock-freedom):} L'utilizzo di operazioni atomiche per l'aggiornamento degli indici di testa e coda elimina la necessità di sospendere le goroutine tramite mutex, riducendo drasticamente il costo del \textit{context switch}.
+    \item \textbf{Mitigazione del False Sharing:} L'implementazione rigorosa del padding delle cache-line (\texttt{cpu.CacheLinePad}) tra gli indici di lettura e scrittura impedisce l'invalidazione non necessaria delle linee di cache L1/L2 quando produttore e consumatore operano su core fisici diversi. I canali standard del Go, dovendo rimanere primitive generiche, non possono applicare ottimizzazioni di memoria così aggressive e specifiche.
+\end{itemize}
+
+In conclusione, l'adozione di strutture dati specializzate permette al layer di trasporto della libreria di non divenire il collo di bottiglia del sistema, liberando cicli CPU per la logica di analisi dei dati.

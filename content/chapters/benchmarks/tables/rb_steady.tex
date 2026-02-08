@@ -1,0 +1,18 @@
+\begin{table}[h]
+\centering
+\begin{tabular}{llrrr}
+\hline
+\textbf{Architettura} & \textbf{Variante} & \textbf{Baseline (ns/op)} & \textbf{RingBuffer (ns/op)} & \textbf{Speedup} \\ \hline
+\multirow{3}{*}{\textbf{AMD EPYC}} & SPSC & 82.47 & 17.38 & \textbf{4.75x} \\
+ & SPMC & 82.47 & 20.78 & \textbf{3.97x} \\
+ & MPSC & 82.47 & 20.92 & \textbf{3.94x} \\ \hline
+\multirow{3}{*}{\textbf{Intel i7}} & SPSC & 105.60 & 38.61 & \textbf{2.74x} \\
+ & SPMC & 105.60 & 49.63 & \textbf{2.13x} \\
+ & MPSC & 105.60 & 49.26 & \textbf{2.14x} \\ \hline
+\multirow{3}{*}{\textbf{Apple M1}} & SPSC & 56.30 & 35.05 & \textbf{1.61x} \\
+ & SPMC & 56.30 & 37.39 & \textbf{1.51x} \\
+ & MPSC & 56.30 & 38.27 & \textbf{1.47x} \\ \hline
+\end{tabular}
+\caption{Confronto latenza e speedup in regime stazionario}
+\label{tab:steady_state}
+\end{table}

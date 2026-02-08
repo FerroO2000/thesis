@@ -154,3 +154,42 @@
   captionpos=b,
   escapeinside={\%*}{*)}
 }
+
+\lstdefinelanguage{Bash}{
+  morekeywords={
+    alias, bg, bind, break, builtin, caller, case, cd, command, compgen,
+    complete, continue, declare, dirs, disown, do, done, echo, else, enable,
+    eval, exec, exit, export, false, fc, fg, fi, for, function, getopts,
+    hash, help, history, if, in, jobs, kill, let, local, logout, popd,
+    printf, pushd, pwd, read, readonly, return, set, shift, shopt, source,
+    suspend, test, then, time, times, trap, true, type, typeset, ulimit,
+    umask, unalias, unset, until, wait, while,
+    go, git, docker, make, sudo, apt, yum
+  },
+  sensitive=true,
+  morecomment=[l]{\#},
+  morestring=[b]",
+  morestring=[b]',
+  morestring=[b]`
+}
+
+\definecolor{bashkeyword}{RGB}{0, 55, 255}
+
+\lstset{
+  language=Bash,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{bashkeyword}\bfseries,
+  commentstyle=\color{gray}\itshape,
+  stringstyle=\color{red},
+  breaklines=true,
+  breakatwhitespace=true,
+  tabsize=2,
+  showstringspaces=false,
+  frame=tb,
+  rulecolor=\color{black},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  numbersep=9pt,
+  captionpos=b,
+  escapeinside={\%*}{*)}
+}
