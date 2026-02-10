@@ -1,0 +1,63 @@
+\chapter{Sviluppi futuri}
+\label{chap:future}
+
+L'architettura della libreria \textit{Goccia}, descritta nei capitoli precedenti, ha dimostrato di soddisfare i requisiti di performance e scalabilità richiesti dal sistema di telemetria di Squadra Corse. Tuttavia, l'evoluzione continua dei protocolli di rete e la necessità di supportare scenari di utilizzo sempre più complessi suggeriscono diverse direzioni per l'evoluzione del progetto. Questo capitolo illustra le principali estensioni pianificate, organizzate per area tematica: miglioramenti ai protocolli di ingresso e uscita, pattern avanzati di routing e gestione del flusso, estendibilità dell'API pubblica e consolidamento della qualità del software.
+
+\section{Evoluzione dei protocolli di trasporto}
+
+\subsection{Supporto al protocollo QUIC}
+Attualmente, la libreria supporta protocolli di trasporto tradizionali come TCP e UDP. Un'evoluzione naturale per il layer di \textit{Ingress} è l'adozione di QUIC (Quick UDP Internet Connections), un protocollo di trasporto moderno basato su UDP che offre latenza ridotta e migliore gestione della congestione rispetto al TCP.
+
+L'implementazione di un \textit{QUIC Ingress Stage}, basato sulla libreria \texttt{quic-go} \cite{quic-go}, permetterebbe di gestire stream affidabili e multiplexati su una singola connessione UDP, eliminando il problema dell'\textit{head-of-line blocking} tipico del TCP. Questo scenario è ideale, per esempio, per un sistema di telemetria che opera in condizioni di rete instabili (es. 4G/5G in movimento), dove QUIC garantisce un recupero più rapido dai pacchetti persi. Lo stage opererebbe accettando stream in ingresso e parallelizzando la lettura dei dati in maniera analoga a quanto avviene già per l'ingress stage TCP.
+
+\subsection{Integrazione del protocollo MQTT}
+Parallelamente all'adozione di QUIC, si ritiene fondamentale estendere la connettività della libreria verso il mondo IoT implementando un \textit{MQTT Ingress Stage}. Il protocollo MQTT (\textit{Message Queuing Telemetry Transport}), grazie alla sua leggerezza e al modello \textit{publish-subscribe}, rappresenta lo standard \textit{de facto} per la comunicazione machine-to-machine in ambienti a banda limitata, rendendolo un complemento ideale per scenari di telemetria meno critici in termini di real-time ma che richiedono elevata scalabilità.
+
+L'implementazione proposta, basata sulla libreria \texttt{eclipse/paho.mqtt.golang} \cite{mqtt-paho}, prevederebbe la creazione di un client capace di sottoscriversi a topic multipli, supportando anche l'uso di \textit{wildcards} (es. \texttt{telemetry/+/sensors/\#}) per aggregare flussi dati eterogenei in un unico punto di ingresso. Un aspetto cruciale sarà la mappatura configurabile tra i livelli di QoS (\textit{Quality of Service}) del protocollo e le garanzie di delivery della pipeline: lo stage dovrà permettere all'utente di bilanciare latenza e affidabilità, scegliendo tra una semantica \textit{fire-and-forget} (QoS 0) per dati ad alta frequenza o confermata (QoS 1/2) per eventi critici, convertendo in modo trasparente i payload binari nel formato di messaggio interno di \textit{Goccia}.
+
+\subsection{Servizi REST ad alte prestazioni con FastHTTP}
+Per estendere l'applicabilità di \textit{Goccia} oltre il puro stream processing, si propone l'introduzione di un \textit{Ingress Stage} basato su \texttt{valyala/fasthttp} \cite{fasthttp}, un'alternativa ad alte prestazioni alla libreria standard \texttt{net/http} di Go, capace di gestire carichi superiori a 100k richieste al secondo grazie a una gestione aggressiva della memoria (zero memory allocations in hot paths).
+
+Questo sviluppo permetterebbe di esporre endpoint REST direttamente dalla pipeline, trasformando \textit{Goccia} in un motore per microservizi \textit{event-driven}.
+
+\section{Pattern avanzati di Routing e Flusso}
+
+\subsection{Implementazione del pattern Request-Reply (Futures)}
+L'introduzione di un ingresso HTTP pone una sfida architetturale: la pipeline è unidirezionale (\textit{fire-and-forget}), mentre HTTP è intrinsecamente sincrono (richiesta-risposta). Per risolvere questa dicotomia, si prevede l'implementazione di un sistema intelligente di \textit{Futures}.
+
+L'architettura proposta prevede due componenti accoppiati:
+\begin{description}
+    \item[HTTP Ingress Stage:] Alla ricezione di una richiesta, genera un \textit{Correlation ID} univoco e crea un canale di ritorno (la \textit{future}). Il contesto della richiesta viene sospeso in attesa su questo canale, oppure su un'altra primitiva di sincronizzazione, mentre il payload viene inviato nella pipeline.
+    \item[HTTP Reply Egress Stage:] Uno stadio terminale speciale che, ricevendo il messaggio elaborato, utilizza il \textit{Correlation ID} per recuperare il canale sospeso e inviare la risposta all'Ingress, sbloccando così l'handler HTTP.
+\end{description}
+
+Questo meccanismo permetterebbe di eseguire elaborazioni complesse (es. validazione, arricchimento dati, query al database) in modo totalmente asincrono e parallelo, restituendo il risultato al client HTTP senza bloccare i thread di gestione delle connessioni.
+
+\subsection{Content-Based Routing}
+Attualmente, la pipeline è lineare o ramificata staticamente (tramite lo stage \texttt{Tee}). Per introdurre logiche decisionali dinamiche, si propone lo sviluppo di un \textit{Router Processor}, ispirato al pattern EIP \textit{Content-Based Router} \cite{eip-content-based-router}.
+
+A differenza dei processori standard che possiedono un singolo connettore di output, questo stage gestirebbe una mappa di connettori di destinazione. Una funzione di routing, definita dall'utente, analizzerebbe il contenuto del messaggio (es. tipo di sensore, livello di priorità, flag di errore) per determinare dinamicamente verso quale ramo della pipeline inoltrare il dato. Ciò abiliterebbe scenari complessi come la separazione, per esempio, del traffico di "Allarme" su un canale prioritario rispetto ad un traffico ordinario.
+
+\section{Estendibilità e Storage}
+
+\subsection{InfluxDB Egress Stage}
+Per potenziare le capacità di storicizzazione delle serie temporali, si pianifica l'aggiunta di un \textit{InfluxDB Egress Stage}, utilizzando il client ufficiale \texttt{influxdb-client-go} \cite{influxdb-client-go}. Questo stage renderebbe la libreria idonea ad essere utilizzata in svariati scenari e contesti, come dal semplice monitoraggio dei sistemi informatici, all'immagazzinamento di dati telemetrici dei satelliti.
+
+\subsection{Custom Ingress ed Egress}
+Attualmente, la libreria permette la definizione di logica custom solo per gli stage intermedi (\textit{Processor}). Si intende generalizzare questo concetto introducendo le interfacce \texttt{CustomIngress} e \texttt{CustomEgress}.
+
+\begin{description}
+    \item[Custom Ingress:] Permetterà agli utenti di implementare sorgenti dati proprietarie (es. driver per hardware specifico, protocolli industriali legacy) fornendo semplicemente un canale o una funzione di callback per l'iniezione dei messaggi nella pipeline.
+    \item[Custom Egress:] Consentirà di definire destinazioni arbitrarie (es. API di terze parti, sistemi di messaggistica non supportati nativamente) implementando una semplice interfaccia
+\end{description}
+
+Questa modifica renderà \textit{Goccia} una libreria agnostica rispetto ai protocolli, permettendo agli utilizzatori di estenderne le capacità senza modificarne il nucleo.
+
+\section{Qualità e Affidabilità}
+
+\subsection{Miglioramento della Test Coverage}
+La robustezza di una libreria infrastrutturale critica come \textit{Goccia} richiede una copertura di test rigorosa. Gli sviluppi futuri includeranno:
+\begin{description}
+    \item[Integration Tests:] Utilizzo di container Docker effimeri (tramite librerie come \texttt{Testcontainers}) per validare gli stage di Ingress/Egress contro istanze reali di Kafka, InfluxDB e QuestDB, superando i limiti dei mock attuali.
+    \item[Fuzz Testing:] Applicazione di tecniche di \textit{fuzzing} sui parser dei protocolli (Cannelloni, CSV, JSON) per identificare edge case e potenziali panic causati da input malformati, garantendo la stabilità del sistema anche in presenza di dati corrotti.
+\end{description}
